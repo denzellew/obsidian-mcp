@@ -1,6 +1,7 @@
 [tools]
-bun = "1"
-node = "22"
+# Exact-pinned for reproducible dev/build; bump deliberately via the upgrade skill.
+bun = "1.3.14"
+node = "24.16.0"
 
 [env]
 DATA_DIR = "{{config_root}}/data"

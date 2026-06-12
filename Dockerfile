@@ -1,9 +1,9 @@
 # ---- ob: install obsidian-headless where a build toolchain exists ----------
-FROM node:22 AS ob
+FROM node:24.16.0 AS ob
 RUN npm install -g --prefix /opt/ob obsidian-headless
 
 # ---- app: build CSS + bundle the server with bun ----------------------------
-FROM oven/bun:1 AS build
+FROM oven/bun:1.3.14 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
@@ -13,11 +13,11 @@ RUN bunx @tailwindcss/cli -i styles/app.css -o public/app.css --minify \
  && mkdir -p dist/migrations && cp src/db/migrations/*.sql dist/migrations/
 
 # ---- runtime -----------------------------------------------------------------
-FROM node:22-slim
+FROM node:24.16.0-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git tini ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.14 /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=ob /opt/ob /opt/ob
 ENV PATH="/opt/ob/bin:${PATH}" \
     NODE_ENV=production \
