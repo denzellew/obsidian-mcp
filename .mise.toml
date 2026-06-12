@@ -18,6 +18,16 @@ run = "bunx @tailwindcss/cli -i styles/app.css -o public/app.css --watch"
 [tasks.dev]
 depends = ["dev:server", "dev:css"]
 
+# Dev-only: run whichever reverse tunnels are configured (gatecrash and/or
+# cloudflared) to expose the local dev server. Production uses compose sidecars.
+[tasks.tunnel]
+description = "Run configured dev tunnels (gatecrash/cloudflared) to the local server"
+run = "bun scripts/tunnel.ts"
+
+[tasks.doctor]
+description = "Show dev environment diagnostics (toolchain, config, data, tunnels, server)"
+run = "bun scripts/doctor.ts"
+
 [tasks.test]
 run = "bun test"
 
