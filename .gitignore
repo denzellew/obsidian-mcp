@@ -4,3 +4,6 @@ dist/
 public/app.css
 .DS_Store
 *.local
+.env
+.env.*
+!.env.example

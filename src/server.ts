@@ -10,6 +10,7 @@ import { Snapshotter } from "./snapshots/snapshotter.ts";
 import { createVaultContext } from "./mcp/context.ts";
 import { passkeyCount } from "./auth/webauthn.ts";
 import { sweepExpired } from "./auth/sessions.ts";
+import { pruneAudit } from "./mcp/audit.ts";
 import { SyncSupervisor } from "./sync/supervisor.ts";
 import type { SetupState } from "./web/routes/setup.tsx";
 import { logger } from "./log.ts";
@@ -55,7 +56,10 @@ if (passkeyCount(db) === 0) {
   console.log("=".repeat(72) + "\n");
 }
 
-setInterval(() => sweepExpired(db), 3_600_000);
+setInterval(() => {
+  sweepExpired(db);
+  pruneAudit(db);
+}, 3_600_000);
 sweepExpired(db);
 
 // --- vault, snapshots, sync --------------------------------------------------
@@ -70,7 +74,13 @@ const snapshotter = new Snapshotter(config.snapshotsDir, config.vaultDir, {
 await snapshotter.init();
 snapshotter.startTimers();
 
-const vaultCtx = createVaultContext({ store, links, snapshotter, vaultName: basename(config.vaultDir) });
+const vaultCtx = createVaultContext({
+  store,
+  links,
+  snapshotter,
+  vaultName: basename(config.vaultDir),
+  ownerGuidance: () => getSetting(db, "vault_instructions"),
+});
 
 const sync = new SyncSupervisor(config, db);
 sync.autostart();

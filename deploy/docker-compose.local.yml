@@ -1,0 +1,24 @@
+# Try Obsidian MCP locally — builds the image from source, no published image,
+# no tunnel. Port 3000 is published so you reach it directly at localhost.
+#
+# From the repo root:
+#   docker compose -f deploy/docker-compose.local.yml up --build
+#   docker compose -f deploy/docker-compose.local.yml logs app   ← setup token
+# then open http://localhost:3000/setup.
+#
+# Passkeys work on http://localhost (browser secure-context exception). With no
+# PUBLIC_URL set, the app derives its origin from the request (→ localhost:3000).
+# Data persists in deploy/data (gitignored).
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: obsidian-mcp:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data

@@ -76,6 +76,7 @@ export function registerVaultInfo(server: McpServer, ctx: VaultContext) {
         link_format: settings.newLinkFormat,
         uses_markdown_links: settings.useMarkdownLinks,
         recently_modified: recent.slice(0, 5),
+        ...(ctx.ownerGuidance()?.trim() ? { owner_guidance: ctx.ownerGuidance()!.trim() } : {}),
       });
     }),
   );

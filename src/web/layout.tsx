@@ -13,7 +13,7 @@ export function Layout(props: { title?: string; children: Child; nav?: boolean; 
       </head>
       <body class="min-h-full">
         {props.nav !== false ? <Nav active={props.activeNav} /> : null}
-        <main class={props.nav !== false ? "mx-auto max-w-4xl px-6 py-8" : ""}>{props.children}</main>
+        <main class={props.nav !== false ? "mx-auto max-w-6xl px-6 py-8" : ""}>{props.children}</main>
       </body>
     </html>
   );
@@ -21,6 +21,8 @@ export function Layout(props: { title?: string; children: Child; nav?: boolean; 
 
 const NAV_ITEMS = [
   ["/app", "Dashboard"],
+  ["/app/audit", "Activity"],
+  ["/app/guidance", "Guidance"],
   ["/app/tokens", "Tokens"],
   ["/app/connections", "Connections"],
   ["/app/sync", "Sync"],
@@ -31,23 +33,23 @@ const NAV_ITEMS = [
 function Nav(props: { active?: string }) {
   return (
     <nav class="border-b border-base-700 bg-base-900">
-      <div class="mx-auto flex max-w-4xl items-center gap-1 px-6">
-        <a href="/app" class="mr-4 flex items-center gap-2 py-3 font-semibold text-text">
+      <div class="mx-auto flex max-w-6xl items-center gap-1 px-6">
+        <a href="/app" class="mr-4 flex shrink-0 items-center gap-2 py-3 font-semibold whitespace-nowrap text-text">
           <img src="/assets/logo.svg" alt="" class="h-5 w-5" />
           Obsidian MCP
         </a>
         {NAV_ITEMS.map(([href, label]) => (
           <a
             href={href}
-            class={`rounded-md px-3 py-1.5 text-sm ${
+            class={`shrink-0 rounded-md px-3 py-1.5 text-sm whitespace-nowrap ${
               props.active === href ? "bg-accent-muted/40 text-text" : "text-text-muted hover:text-text"
             }`}
           >
             {label}
           </a>
         ))}
-        <form method="post" action="/logout" class="ml-auto">
-          <button type="submit" class="px-2 py-1.5 text-sm text-text-muted hover:text-text">
+        <form method="post" action="/logout" class="ml-auto shrink-0">
+          <button type="submit" class="px-2 py-1.5 text-sm whitespace-nowrap text-text-muted hover:text-text">
             Sign out
           </button>
         </form>

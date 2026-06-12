@@ -26,6 +26,9 @@ import { connectionsRouter } from "./web/routes/connections.tsx";
 import { dashboardRouter } from "./web/routes/dashboard.tsx";
 import { syncRouter } from "./web/routes/sync.tsx";
 import { snapshotsRouter } from "./web/routes/snapshots.tsx";
+import { auditRouter } from "./web/routes/audit.tsx";
+import { guidanceRouter } from "./web/routes/guidance.tsx";
+import { recordAudit } from "./mcp/audit.ts";
 import type { SyncSupervisor } from "./sync/supervisor.ts";
 
 export interface AppDeps {
@@ -84,7 +87,18 @@ export function createApp(deps: AppDeps) {
   app.use("/mcp", mcpOriginGuard(), requireBearer(db));
   app.all("/mcp", async (c) => {
     const transport = new StreamableHTTPTransport();
-    const server = createMcpServer(deps.vaultCtx);
+    const principal = c.var.principal!;
+    const server = createMcpServer(deps.vaultCtx, {
+      onToolCall: (tool, args, result) =>
+        recordAudit(
+          db,
+          principal,
+          tool,
+          args,
+          result.isError ? "error" : "ok",
+          result.isError ? firstText(result) : undefined,
+        ),
+    });
     await server.connect(transport);
     // revoking the token kills any live SSE stream for it immediately
     const token = c.var.bearerToken!;
@@ -99,6 +113,8 @@ export function createApp(deps: AppDeps) {
   app.route("/app/tokens", tokensRouter(db, config));
   app.route("/app/passkeys", passkeysRouter(db, config));
   app.route("/app/connections", connectionsRouter(db));
+  app.route("/app/audit", auditRouter(db));
+  app.route("/app/guidance", guidanceRouter(db));
   if (deps.sync) app.route("/app/sync", syncRouter(db, config, deps.sync));
   app.route("/app/snapshots", snapshotsRouter(deps.vaultCtx));
   app.route("/app", dashboardRouter(deps));
@@ -106,4 +122,10 @@ export function createApp(deps: AppDeps) {
   app.get("/", (c) => c.redirect("/app"));
 
   return app;
+}
+
+/** First line of a tool result's text content, for the audit detail column. */
+function firstText(result: { content?: { type: string; text?: string }[] }): string | undefined {
+  const block = result.content?.find((b) => b.type === "text");
+  return block?.text?.split("\n")[0]?.slice(0, 200);
 }

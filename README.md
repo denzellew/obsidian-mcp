@@ -28,9 +28,17 @@ The server must be reachable over HTTPS (passkeys and Claude connectors require 
 ```sh
 mkdir obsidian-mcp && cd obsidian-mcp
 curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/jclement/obsidian-mcp/main/deploy/docker-compose.gatecrash.yml
-# create .env with PUBLIC_URL + tunnel credentials (see comments in the compose file)
+# create .env with tunnel credentials (see comments in the compose file)
 docker compose up -d
 docker compose logs app        # ← copy the FIRST-RUN SETUP token
+```
+
+**Just want to try it locally** (no tunnel, no published image)? From a checkout:
+
+```sh
+docker compose -f deploy/docker-compose.local.yml up --build
+docker compose -f deploy/docker-compose.local.yml logs app   # ← setup token
+# open http://localhost:3000/setup
 ```
 
 Open `https://your-host/setup`, paste the token, and register a passkey. That passkey is now the only way into the management UI; add more from the Passkeys page.

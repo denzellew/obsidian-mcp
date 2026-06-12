@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { Config } from "../config.ts";
 import { getSetting, setSetting } from "../db/index.ts";
 import { obEnv } from "./ob.ts";
+import { clearLock, reapStrayOb, writeLock } from "./lock.ts";
 import { logger } from "../log.ts";
 
 const log = logger("sync");
@@ -99,6 +100,8 @@ export class SyncSupervisor {
     this.state = "starting";
     this.lastError = null;
     this.startedAt = Date.now();
+    // kill any ob left over from a prior run on this vault (HMR orphan, crash)
+    reapStrayOb(this.config);
     let proc: ReturnType<typeof Bun.spawn>;
     try {
       proc = Bun.spawn([this.config.obBin, "sync", "--path", this.config.vaultDir, "--continuous"], {
@@ -114,6 +117,7 @@ export class SyncSupervisor {
       return;
     }
     this.proc = proc;
+    writeLock(this.config, proc.pid);
     this.state = "running";
     this.appendLog(`[supervisor] started ob sync --continuous (pid ${proc.pid})`);
     log.info(`ob sync started (pid ${proc.pid})`);
@@ -174,6 +178,7 @@ export class SyncSupervisor {
       proc.kill("SIGKILL");
       await proc.exited;
     }
+    clearLock(this.config);
     this.appendLog("[supervisor] ob stopped");
   }
 

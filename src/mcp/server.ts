@@ -12,6 +12,7 @@ import { registerListTags } from "./tools/list-tags.ts";
 import { registerDailyNote } from "./tools/daily-note.ts";
 import { registerResources } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 export const SERVER_INSTRUCTIONS = `Obsidian vault server. The vault may be edited concurrently by the user's other devices (Obsidian Sync), so:
 - ALWAYS read_note before editing and pass its hash as expected_hash; on STALE_NOTE errors, re-read and retry.
@@ -20,11 +21,38 @@ export const SERVER_INSTRUCTIONS = `Obsidian vault server. The vault may be edit
 - Paths are vault-relative; wikilink targets like "Note Name" are accepted wherever a path is expected.
 - Deletions go to .trash/ and every mutation is git-snapshotted — mistakes are recoverable, but say what you changed.`;
 
-export function createMcpServer(ctx: VaultContext): McpServer {
+export interface McpServerOptions {
+  /** Called after each tool invocation for audit logging. */
+  onToolCall?: (tool: string, args: Record<string, unknown>, result: CallToolResult) => void;
+}
+
+/** Compose the base instructions with the owner's vault-specific guidance. */
+export function buildInstructions(ctx: VaultContext): string {
+  const guidance = ctx.ownerGuidance()?.trim();
+  if (!guidance) return SERVER_INSTRUCTIONS;
+  return `${SERVER_INSTRUCTIONS}\n\n## Vault-specific guidance from the owner\nFollow this when working in the vault:\n\n${guidance}`;
+}
+
+export function createMcpServer(ctx: VaultContext, opts: McpServerOptions = {}): McpServer {
   const server = new McpServer(
     { name: "obsidian-mcp", version: "0.1.0" },
-    { instructions: SERVER_INSTRUCTIONS },
+    { instructions: buildInstructions(ctx) },
   );
+
+  // wrap registerTool so every call is reported to the audit sink
+  if (opts.onToolCall) {
+    const orig = server.registerTool.bind(server);
+    const onCall = opts.onToolCall;
+    (server.registerTool as unknown) = (name: string, config: unknown, handler: (...a: unknown[]) => Promise<CallToolResult>) =>
+      orig(name as string, config as never, (async (args: Record<string, unknown>, extra: unknown) => {
+        const result = await handler(args ?? {}, extra);
+        try {
+          onCall(name, args ?? {}, result);
+        } catch {}
+        return result;
+      }) as never);
+  }
+
   registerVaultInfo(server, ctx);
   registerBrowseVault(server, ctx);
   registerSearchVault(server, ctx);

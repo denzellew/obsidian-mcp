@@ -13,6 +13,9 @@
 services:
   app:
     image: ghcr.io/jclement/obsidian-mcp:latest
+    # To build from a local checkout instead of pulling the published image,
+    # uncomment this and run `docker compose up --build`:
+    # build: { context: .., dockerfile: Dockerfile }
     restart: unless-stopped
     stop_grace_period: 30s
     # environment:

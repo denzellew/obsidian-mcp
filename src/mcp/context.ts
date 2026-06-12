@@ -11,6 +11,8 @@ export interface VaultContext {
   vaultName: string;
   settings(): ObsidianSettings;
   now(): Date;
+  /** Owner-supplied guidance on how to use this vault (conventions, plugins). */
+  ownerGuidance(): string | null;
 }
 
 export function createVaultContext(args: {
@@ -19,6 +21,7 @@ export function createVaultContext(args: {
   snapshotter: Snapshotter;
   vaultName?: string;
   now?: () => Date;
+  ownerGuidance?: () => string | null;
 }): VaultContext {
   return {
     store: args.store,
@@ -27,5 +30,6 @@ export function createVaultContext(args: {
     vaultName: args.vaultName ?? "Vault",
     settings: () => readObsidianSettings(args.store.vaultDir),
     now: args.now ?? (() => new Date()),
+    ownerGuidance: args.ownerGuidance ?? (() => null),
   };
 }
