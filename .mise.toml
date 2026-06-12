@@ -1,0 +1,35 @@
+[tools]
+bun = "1"
+node = "22"
+
+[env]
+DATA_DIR = "{{config_root}}/data"
+PUBLIC_URL = "http://localhost:3000"
+
+[tasks."dev:server"]
+run = "bun --watch src/server.ts"
+
+[tasks."dev:css"]
+run = "bunx @tailwindcss/cli -i styles/app.css -o public/app.css --watch"
+
+[tasks.dev]
+depends = ["dev:server", "dev:css"]
+
+[tasks.test]
+run = "bun test"
+
+[tasks.typecheck]
+run = "bunx tsc --noEmit"
+
+[tasks.build]
+run = [
+  "bunx @tailwindcss/cli -i styles/app.css -o public/app.css --minify",
+  "bun build src/server.ts --target=bun --outdir=dist",
+]
+
+[tasks."docker:build"]
+run = "docker build -t ghcr.io/jclement/obsidian-mcp:dev ."
+
+# optional: install the real obsidian-headless client for local sync testing
+[tasks."ob:install"]
+run = "npm install -g obsidian-headless"

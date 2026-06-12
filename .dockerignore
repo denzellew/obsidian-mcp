@@ -1,0 +1,8 @@
+.git
+node_modules
+data
+dist
+public/app.css
+deploy
+docs
+*.md

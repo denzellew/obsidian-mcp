@@ -1,0 +1,58 @@
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+
+export interface TmpVault {
+  dir: string;
+  write(relPath: string, content: string): void;
+  cleanup(): void;
+}
+
+/** Create a throwaway vault directory with optional seed files. */
+export function tmpVault(files: Record<string, string> = {}): TmpVault {
+  const dir = mkdtempSync(join(tmpdir(), "obmcp-vault-"));
+  const write = (relPath: string, content: string) => {
+    const abs = join(dir, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+  for (const [p, c] of Object.entries(files)) write(p, c);
+  return {
+    dir,
+    write,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+/** A representative vault used across suites. */
+export function fixtureVault(): TmpVault {
+  return tmpVault({
+    "Projects/Home Lab.md": [
+      "---",
+      "tags: [project, infra]",
+      "status: active",
+      "---",
+      "# Home Lab",
+      "",
+      "Rebuild the proxmox cluster. See [[Proxmox]] and [[Reference/Networking#VLANs|vlan notes]].",
+      "",
+      "## Tasks",
+      "- [ ] order switch",
+      "",
+      "## Log",
+      "- 2026-06-01 started planning #homelab",
+      "",
+      "![[Attachments/rack.png]]",
+    ].join("\n"),
+    "Reference/Proxmox.md": "# Proxmox\n\nHypervisor notes. #infra\n",
+    "Reference/Networking.md": "# Networking\n\n## VLANs\n\nVLAN layout.\n",
+    "Journal/2026-06-10.md": "Made progress on [[Home Lab]] networking today. #journal\n",
+    "Inbox.md": "Quick captures.\n\n- [markdown link](Projects/Home%20Lab.md) to the lab\n",
+    "Attachments/rack.png": "\x89PNG fake",
+    ".obsidian/app.json": JSON.stringify({ newLinkFormat: "shortest", useMarkdownLinks: false, attachmentFolderPath: "Attachments" }),
+    ".obsidian/daily-notes.json": JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", template: "Templates/Daily" }),
+    ".obsidian/templates.json": JSON.stringify({ folder: "Templates" }),
+    "Templates/Daily.md": "# {{date}}\n\n## Log\n\n## Notes\n",
+    ".trash/Old Note.md": "deleted content\n",
+  });
+}

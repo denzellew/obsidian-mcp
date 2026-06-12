@@ -1,0 +1,26 @@
+{
+  "name": "obsidian-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/mcp": "^0.1.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@simplewebauthn/server": "^13.2.0",
+    "hono": "^4.7.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@simplewebauthn/browser": "^13.2.0",
+    "@tailwindcss/cli": "^4.1.0",
+    "@types/bun": "^1.2.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.0"
+  }
+}

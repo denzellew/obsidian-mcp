@@ -1,0 +1,31 @@
+# Obsidian MCP exposed through a self-hosted Gatecrash tunnel
+# (https://github.com/jclement/gatecrash).
+#
+# 1. Copy this file to docker-compose.yml and create a .env next to it:
+#      PUBLIC_URL=https://notes.example.com
+#      GATECRASH_SERVER=tunnel.example.com:51234
+#      GATECRASH_HOST_KEY=SHA256:...
+#      GATECRASH_TOKEN=obsidian-mcp:SECRET
+# 2. docker compose up -d
+# 3. docker compose logs app   ← grab the setup token, open $PUBLIC_URL/setup
+
+services:
+  app:
+    image: ghcr.io/jclement/obsidian-mcp:latest
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL}
+    volumes:
+      - ./data:/data
+
+  tunnel:
+    image: ghcr.io/jclement/gatecrash:latest
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      GATECRASH_SERVER: ${GATECRASH_SERVER}
+      GATECRASH_HOST_KEY: ${GATECRASH_HOST_KEY}
+      GATECRASH_TOKEN: ${GATECRASH_TOKEN}
+      GATECRASH_TARGET: app:3000
