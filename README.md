@@ -8,6 +8,8 @@ A self-hosted MCP server + management UI for your Obsidian vault. One container 
 - **Optional Obsidian Sync** via the official [obsidian-headless](https://help.obsidian.md/headless) client (`ob sync --continuous`), supervised by the server and configured entirely from the web UI — including end-to-end-encrypted vaults. Requires an Obsidian Sync subscription; skip it and bring your own sync (Syncthing, git, nothing).
 - **Automatic git snapshots** of the vault (debounced after every MCP mutation, before destructive operations, hourly, and at shutdown) stored in a bare repo outside the vault. Browse and restore from the UI.
 
+![Obsidian MCP management UI](screenshot.png)
+
 All state lives in a single bind-mounted `./data` directory:
 
 ```
@@ -113,7 +115,7 @@ Requires [mise](https://mise.jdx.dev) (pins bun + node) and git.
 mise install
 bun install
 mise run dev          # server with hot reload + tailwind watch → http://localhost:3000
-mise run test         # bun test (112 tests)
+mise run test         # bun test (133 tests)
 mise run typecheck
 mise run docker:build
 mise run ob:install   # optional: real obsidian-headless for local sync testing
