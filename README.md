@@ -135,3 +135,7 @@ git --git-dir data/snapshots/vault.git --work-tree data/Vault checkout <sha> -- 
 # lost your passkey?
 AUTH_RESET=1 docker compose up -d   # re-enters setup mode; unset afterwards
 ```
+
+## License
+
+[MIT](LICENSE) © Jeff Clement
