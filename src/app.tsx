@@ -12,6 +12,7 @@ import {
   rateLimit,
   requireBearer,
   requireSession,
+  resolveOriginMiddleware,
   securityHeaders,
   type AuthEnv,
 } from "./auth/middleware.ts";
@@ -50,32 +51,37 @@ export function createApp(deps: AppDeps) {
     await next();
   });
   app.use("*", securityHeaders());
-  app.use("*", hostGuard(config));
+  app.use("*", resolveOriginMiddleware(config));
+  app.use("*", hostGuard(db, config));
+
+  // CSRF: a request is same-origin when its Origin header matches this
+  // request's resolved public origin (works in fixed and derived modes).
+  const sameOriginCsrf = csrf({ origin: (origin, c) => origin === c.get("publicOrigin") });
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.use("/assets/*", serveStatic({ root: "./public", rewriteRequestPath: (p) => p.replace(/^\/assets/, "") }));
 
   // --- OAuth metadata + public endpoints ---
-  app.route("/.well-known", wellKnownRouter(config));
+  app.route("/.well-known", wellKnownRouter());
   app.use("/oauth/token", rateLimit("oauth", 30));
   app.use("/oauth/register", rateLimit("oauth", 30));
-  app.route("/oauth", oauthPublicRouter(db, config));
+  app.route("/oauth", oauthPublicRouter(db));
 
   // --- OAuth interactive (passkey session + consent) ---
   app.use("/oauth/authorize", requireSession(db, { redirect: true }));
-  app.use("/oauth/consent", requireSession(db, { redirect: true }), csrf({ origin: config.origin }));
-  app.route("/oauth", oauthInteractiveRouter(db, config));
+  app.use("/oauth/consent", requireSession(db, { redirect: true }), sameOriginCsrf);
+  app.route("/oauth", oauthInteractiveRouter(db));
 
   // --- Setup & login ---
   app.use("/setup/*", rateLimit("setup", 10));
   app.use("/setup", rateLimit("setup", 10));
   app.route("/setup", setupRouter(db, config, deps.setupState));
   app.use("/login/*", rateLimit("login", 10));
-  app.use("/logout", csrf({ origin: config.origin }));
+  app.use("/logout", sameOriginCsrf);
   app.route("/", loginRouter(db, config));
 
   // --- MCP endpoint (bearer auth) ---
-  app.use("/mcp", mcpOriginGuard(config), requireBearer(db, config));
+  app.use("/mcp", mcpOriginGuard(), requireBearer(db));
   app.all("/mcp", async (c) => {
     const transport = new StreamableHTTPTransport();
     const server = createMcpServer(deps.vaultCtx);

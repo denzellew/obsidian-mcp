@@ -101,7 +101,7 @@ export function passkeysRouter(db: Database, config: Config): Hono<AuthEnv> {
   let pendingUserHandle: Uint8Array | null = null;
 
   app.post("/options", async (c) => {
-    const { options, challengeId, userHandle } = await startRegistration(db, config);
+    const { options, challengeId, userHandle } = await startRegistration(db, { rpId: c.var.rpId, origin: c.var.publicOrigin });
     pendingUserHandle = userHandle;
     return c.json({ options, challengeId });
   });
@@ -111,7 +111,7 @@ export function passkeysRouter(db: Database, config: Config): Hono<AuthEnv> {
     if (!pendingUserHandle) return c.json({ error: "No registration in progress." }, 400);
     const result = await finishRegistration(
       db,
-      config,
+      { rpId: c.var.rpId, origin: c.var.publicOrigin },
       body.response,
       body.challengeId,
       String(body.name ?? "").trim() || "Unnamed passkey",

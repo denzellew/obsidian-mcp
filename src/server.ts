@@ -31,8 +31,11 @@ if (config.authReset) {
   log.warn("AUTH_RESET=1: all passkeys and sessions wiped — setup mode re-entered. Unset AUTH_RESET and restart after re-registering.");
 }
 
+// In fixed mode, warn loudly if the configured host no longer matches the
+// host passkeys were registered under. In derived mode this is enforced
+// per-request with a user-facing message instead.
 const rpAtSetup = getSetting(db, "rp_id_at_setup");
-if (rpAtSetup && rpAtSetup !== config.rpId && passkeyCount(db) > 0) {
+if (!config.derived && rpAtSetup && rpAtSetup !== config.rpId && passkeyCount(db) > 0) {
   log.warn(
     `PUBLIC_URL hostname changed (passkeys were registered for '${rpAtSetup}', now '${config.rpId}'). ` +
       `Existing passkeys will NOT work. Restart with AUTH_RESET=1 to re-run setup. Static API tokens still work.`,
@@ -42,10 +45,11 @@ if (rpAtSetup && rpAtSetup !== config.rpId && passkeyCount(db) > 0) {
 const setupState: SetupState = { token: null, pendingUserHandle: null };
 if (passkeyCount(db) === 0) {
   setupState.token = `setup_${randomBytes(16).toString("hex")}`;
+  const where = config.publicUrl ? `${config.publicUrl.origin}/setup` : "https://<your-host>/setup";
   // printed prominently; proves log access = box ownership
   console.log("\n" + "=".repeat(72));
   console.log("  FIRST-RUN SETUP");
-  console.log(`  Open ${config.publicUrl.origin}/setup and enter this token:`);
+  console.log(`  Open ${where} and enter this token:`);
   console.log(`\n      ${setupState.token}\n`);
   console.log("  A new token is generated on every restart until setup completes.");
   console.log("=".repeat(72) + "\n");
@@ -81,7 +85,9 @@ const server = Bun.serve({
   idleTimeout: 120, // SSE streams
 });
 
-log.info(`listening on http://localhost:${server.port} (public: ${config.publicUrl.origin})`);
+log.info(
+  `listening on http://localhost:${server.port} (public: ${config.publicUrl?.origin ?? "derived from proxy headers"})`,
+);
 
 let shuttingDown = false;
 async function shutdown(signal: string) {

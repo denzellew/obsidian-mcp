@@ -2,20 +2,22 @@
 # (https://github.com/jclement/gatecrash).
 #
 # 1. Copy this file to docker-compose.yml and create a .env next to it:
-#      PUBLIC_URL=https://notes.example.com
 #      GATECRASH_SERVER=tunnel.example.com:51234
 #      GATECRASH_HOST_KEY=SHA256:...
 #      GATECRASH_TOKEN=obsidian-mcp:SECRET
 # 2. docker compose up -d
-# 3. docker compose logs app   ← grab the setup token, open $PUBLIC_URL/setup
+# 3. docker compose logs app   ← grab the setup token, open https://<your-host>/setup
+#
+# PUBLIC_URL is optional: the app derives its public origin from the tunnel's
+# forwarded headers. Set it only to hard-pin the hostname.
 
 services:
   app:
     image: ghcr.io/jclement/obsidian-mcp:latest
     restart: unless-stopped
     stop_grace_period: 30s
-    environment:
-      PUBLIC_URL: ${PUBLIC_URL}
+    # environment:
+    #   PUBLIC_URL: https://notes.example.com   # optional override
     volumes:
       - ./data:/data
 

@@ -24,7 +24,8 @@ export function dashboardRouter(deps: AppDeps) {
   const app = new Hono<AppEnv>();
 
   app.get("/", async (c) => {
-    const { vaultCtx, sync, config } = deps;
+    const { vaultCtx, sync } = deps;
+    const publicOrigin = c.var.publicOrigin;
     let notes = 0;
     let attachments = 0;
     for (const f of vaultCtx.store.walkFiles()) {
@@ -75,7 +76,7 @@ export function dashboardRouter(deps: AppDeps) {
           </Card>
 
           <Card title="MCP endpoint">
-            <p class="font-mono text-sm text-text-muted">{config.origin}/mcp</p>
+            <p class="font-mono text-sm text-text-muted">{publicOrigin}/mcp</p>
             <p class="mt-2 text-sm text-text-muted">
               Connect Claude Desktop via OAuth (just add the URL) or create a bearer token under{" "}
               <a href="/app/tokens" class="text-accent-hover hover:underline">Tokens</a> for Claude Code.

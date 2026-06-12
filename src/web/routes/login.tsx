@@ -38,18 +38,18 @@ export function loginRouter(db: Database, config: Config): Hono<AuthEnv> {
   });
 
   app.post("/login/webauthn/options", async (c) => {
-    const { options, challengeId } = await startAuthentication(db, config);
+    const { options, challengeId } = await startAuthentication(db, { rpId: c.var.rpId, origin: c.var.publicOrigin });
     return c.json({ options, challengeId });
   });
 
   app.post("/login/webauthn/verify", async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const result = await finishAuthentication(db, config, body.response, body.challengeId);
+    const result = await finishAuthentication(db, { rpId: c.var.rpId, origin: c.var.publicOrigin }, body.response, body.challengeId);
     if ("error" in result) return c.json(result, 401);
     const session = createSession(db, result.userId, c.req.header("user-agent"));
     setCookie(c, SESSION_COOKIE, session, {
       httpOnly: true,
-      secure: config.publicUrl.protocol === "https:",
+      secure: c.var.secureCookies,
       sameSite: "Lax",
       path: "/",
       maxAge: 30 * 24 * 3600,

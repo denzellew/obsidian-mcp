@@ -8,9 +8,15 @@ import {
   type AuthenticationResponseJSON,
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
-import type { Config } from "../config.ts";
+import { getSetting, setSetting } from "../db/index.ts";
 
 const CHALLENGE_TTL_S = 300;
+
+/** The public origin + relying-party ID for a request (configured or proxy-derived). */
+export interface RelyingParty {
+  rpId: string;
+  origin: string;
+}
 
 export interface PasskeyRow {
   id: string;
@@ -65,13 +71,32 @@ export function passkeyCount(db: Database): number {
   return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM passkey_credentials").get()!.n;
 }
 
+/** The rpID this server is pinned to (set at first passkey registration). */
+export function pinnedRpId(db: Database): string | null {
+  return getSetting(db, "rp_id_at_setup");
+}
+
+/** Reject auth under a different host than the one set up with. */
+function checkPin(db: Database, rp: RelyingParty): { error: string } | null {
+  const pinned = pinnedRpId(db);
+  if (pinned && pinned !== rp.rpId) {
+    return {
+      error:
+        `This server was set up for host '${pinned}', but you are connecting as '${rp.rpId}'. ` +
+        `Passkeys are bound to the original host. If the hostname genuinely changed, restart the server ` +
+        `with AUTH_RESET=1 to re-run setup.`,
+    };
+  }
+  return null;
+}
+
 /** Start a passkey registration ceremony (setup or add-passkey). */
-export async function startRegistration(db: Database, config: Config) {
+export async function startRegistration(db: Database, rp: RelyingParty) {
   const userHandle = getOrCreateUserHandle(db);
   const existing = listPasskeys(db);
   const options = await generateRegistrationOptions({
     rpName: "Obsidian MCP",
-    rpID: config.rpId,
+    rpID: rp.rpId,
     userID: userHandle,
     userName: "owner",
     userDisplayName: "Owner",
@@ -92,12 +117,14 @@ export async function startRegistration(db: Database, config: Config) {
 /** Verify registration; creates the user row on first passkey. Returns credential id. */
 export async function finishRegistration(
   db: Database,
-  config: Config,
+  rp: RelyingParty,
   body: RegistrationResponseJSON,
   challengeId: string | undefined,
   name: string,
   userHandle: Uint8Array,
 ): Promise<{ credentialId: string } | { error: string }> {
+  const pinErr = checkPin(db, rp);
+  if (pinErr) return pinErr;
   const challenge = consumeChallenge(db, challengeId, "registration");
   if (!challenge) return { error: "Challenge expired or missing — reload the page and try again." };
   let verification;
@@ -105,8 +132,8 @@ export async function finishRegistration(
     verification = await verifyRegistrationResponse({
       response: body,
       expectedChallenge: challenge,
-      expectedOrigin: config.origin,
-      expectedRPID: config.rpId,
+      expectedOrigin: rp.origin,
+      expectedRPID: rp.rpId,
       requireUserVerification: true,
     });
   } catch (err) {
@@ -114,6 +141,9 @@ export async function finishRegistration(
   }
   if (!verification.verified || !verification.registrationInfo) return { error: "Passkey verification failed." };
   const info = verification.registrationInfo;
+
+  // pin the rpID to whatever the first passkey was registered under
+  if (!pinnedRpId(db)) setSetting(db, "rp_id_at_setup", rp.rpId);
 
   const tx = db.transaction(() => {
     const user = db.query("SELECT id FROM users WHERE id = 1").get();
@@ -137,9 +167,9 @@ export async function finishRegistration(
 }
 
 /** Start an authentication ceremony (discoverable credentials → one-tap). */
-export async function startAuthentication(db: Database, config: Config) {
+export async function startAuthentication(db: Database, rp: RelyingParty) {
   const options = await generateAuthenticationOptions({
-    rpID: config.rpId,
+    rpID: rp.rpId,
     userVerification: "required",
     allowCredentials: [],
   });
@@ -149,10 +179,12 @@ export async function startAuthentication(db: Database, config: Config) {
 
 export async function finishAuthentication(
   db: Database,
-  config: Config,
+  rp: RelyingParty,
   body: AuthenticationResponseJSON,
   challengeId: string | undefined,
 ): Promise<{ userId: number } | { error: string }> {
+  const pinErr = checkPin(db, rp);
+  if (pinErr) return pinErr;
   const challenge = consumeChallenge(db, challengeId, "authentication");
   if (!challenge) return { error: "Challenge expired or missing — reload the page and try again." };
   const cred = db.query<PasskeyRow, [string]>("SELECT * FROM passkey_credentials WHERE id = ?").get(body.id);
@@ -162,8 +194,8 @@ export async function finishAuthentication(
     verification = await verifyAuthenticationResponse({
       response: body,
       expectedChallenge: challenge,
-      expectedOrigin: config.origin,
-      expectedRPID: config.rpId,
+      expectedOrigin: rp.origin,
+      expectedRPID: rp.rpId,
       requireUserVerification: true,
       credential: {
         id: cred.id,

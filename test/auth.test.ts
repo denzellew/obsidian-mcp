@@ -31,7 +31,7 @@ beforeAll(async () => {
   const snapshotter = new Snapshotter(snapsDir, vault.dir, { debounceMs: 50, maxWaitMs: 500, intervalMs: 600_000 });
   await snapshotter.init();
   const vaultCtx = createVaultContext({ store, links: new LinkIndex(store), snapshotter });
-  const config = loadConfig({ DATA_DIR: vault.dir } as unknown as NodeJS.ProcessEnv);
+  const config = loadConfig({ DATA_DIR: vault.dir, PUBLIC_URL: "http://localhost:3000" } as unknown as NodeJS.ProcessEnv);
   const app = createApp({ config, db, vaultCtx, setupState: { token: "setup_testtoken", pendingUserHandle: null } });
   server = Bun.serve({ port: 0, fetch: app.fetch });
   base = `http://localhost:${server.port}`;

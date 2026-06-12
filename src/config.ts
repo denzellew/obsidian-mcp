@@ -16,10 +16,17 @@ function bool(name: string, def: boolean): boolean {
 
 export interface Config {
   port: number;
-  publicUrl: URL;
-  /** WebAuthn relying-party ID — hostname of publicUrl */
+  /**
+   * Configured public URL (PUBLIC_URL). When null, the public origin is
+   * derived from the reverse proxy's forwarded headers per request and the
+   * WebAuthn rpID is pinned at first-passkey setup.
+   */
+  publicUrl: URL | null;
+  /** True when running in proxy-derived mode (no PUBLIC_URL). */
+  derived: boolean;
+  /** Fixed WebAuthn rpID (hostname of publicUrl), or a localhost fallback in derived mode. */
   rpId: string;
-  /** Expected WebAuthn / CORS origin — origin of publicUrl */
+  /** Fixed origin (origin of publicUrl), or a localhost fallback in derived mode. */
   origin: string;
   dataDir: string;
   vaultDir: string;
@@ -39,30 +46,39 @@ export interface Config {
 
 export function loadConfig(env = process.env): Config {
   const production = env.NODE_ENV === "production";
-  const rawUrl = env.PUBLIC_URL ?? (production ? undefined : "http://localhost:3000");
-  if (!rawUrl) {
-    throw new Error("PUBLIC_URL is required in production (e.g. https://notes.example.com)");
-  }
-  let publicUrl: URL;
-  try {
-    publicUrl = new URL(rawUrl);
-  } catch {
-    throw new Error(`PUBLIC_URL is not a valid URL: ${rawUrl}`);
-  }
-  const isLocalhost = publicUrl.hostname === "localhost" || publicUrl.hostname === "127.0.0.1";
-  if (publicUrl.protocol !== "https:" && !isLocalhost) {
-    throw new Error("PUBLIC_URL must be https:// (passkeys require a secure context), except on localhost");
-  }
-  if (publicUrl.pathname !== "/") {
-    throw new Error("PUBLIC_URL must not have a path component");
+  const port = int("PORT", 3000);
+
+  // PUBLIC_URL is optional. When set it pins the origin/rpID (most explicit,
+  // best for multi-proxy setups). When unset, we derive the public origin from
+  // the reverse proxy's X-Forwarded-* headers per request — the common case
+  // when the server always sits behind a single trusted tunnel/proxy.
+  const rawUrl = env.PUBLIC_URL;
+  let publicUrl: URL | null = null;
+  if (rawUrl) {
+    try {
+      publicUrl = new URL(rawUrl);
+    } catch {
+      throw new Error(`PUBLIC_URL is not a valid URL: ${rawUrl}`);
+    }
+    const isLocalhost = publicUrl.hostname === "localhost" || publicUrl.hostname === "127.0.0.1";
+    if (publicUrl.protocol !== "https:" && !isLocalhost) {
+      throw new Error("PUBLIC_URL must be https:// (passkeys require a secure context), except on localhost");
+    }
+    if (publicUrl.pathname !== "/") {
+      throw new Error("PUBLIC_URL must not have a path component");
+    }
   }
 
+  const derived = publicUrl === null;
   const dataDir = env.DATA_DIR ?? "./data";
   return {
-    port: int("PORT", 3000),
+    port,
     publicUrl,
-    rpId: publicUrl.hostname,
-    origin: publicUrl.origin,
+    derived,
+    // In derived mode these are only fallbacks for non-request contexts (logging);
+    // real values come from resolveOrigin() per request.
+    rpId: publicUrl?.hostname ?? "localhost",
+    origin: publicUrl?.origin ?? `http://localhost:${port}`,
     dataDir,
     vaultDir: env.VAULT_DIR ?? join(dataDir, "Vault"),
     dbPath: env.DB_PATH ?? join(dataDir, "db", "app.db"),

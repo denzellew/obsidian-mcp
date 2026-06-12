@@ -4,6 +4,8 @@ import type { Database } from "bun:sqlite";
 import type { Config } from "../config.ts";
 import { getSession, type SessionRow } from "./sessions.ts";
 import { verifyBearer, type AuthPrincipal } from "./tokens.ts";
+import { resolveOrigin, isLocalHost } from "../web/origin.ts";
+import { getSetting } from "../db/index.ts";
 
 export const SESSION_COOKIE = "obmcp_sid";
 
@@ -13,8 +15,25 @@ export type AuthEnv = {
     sessionCookie?: string;
     principal?: AuthPrincipal;
     bearerToken?: string;
+    /** Public origin for this request (configured or proxy-derived). */
+    publicOrigin: string;
+    /** WebAuthn rpID for this request. */
+    rpId: string;
+    /** Whether cookies should be Secure (https). */
+    secureCookies: boolean;
   };
 };
+
+/** Resolve the public origin once per request and stash it in context. */
+export function resolveOriginMiddleware(config: Config): MiddlewareHandler<AuthEnv> {
+  return async (c, next) => {
+    const r = resolveOrigin(c, config);
+    c.set("publicOrigin", r.origin);
+    c.set("rpId", r.rpId);
+    c.set("secureCookies", r.secure);
+    await next();
+  };
+}
 
 export function securityHeaders(): MiddlewareHandler {
   return async (c, next) => {
@@ -32,55 +51,64 @@ export function securityHeaders(): MiddlewareHandler {
 }
 
 /**
- * DNS-rebinding defense: the Host header must match PUBLIC_URL's host
- * (localhost allowed for dev/tunnel-internal health checks).
+ * DNS-rebinding defense. In fixed mode the Host must match PUBLIC_URL's host.
+ * In derived mode the host is trusted from the proxy, but once a passkey is
+ * registered the rpID is pinned, so we require the request host to match the
+ * pinned rpID (localhost always allowed for internal health checks).
  */
-export function hostGuard(config: Config): MiddlewareHandler {
-  const expected = config.publicUrl.host;
+export function hostGuard(db: Database, config: Config): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
-    const host = c.req.header("host");
-    if (
-      host === expected ||
-      host?.startsWith("localhost:") ||
-      host === "localhost" ||
-      host?.startsWith("127.0.0.1:") ||
-      host === "127.0.0.1"
-    ) {
-      return next();
+    if (!config.derived && config.publicUrl) {
+      // fixed mode: compare the raw Host (proxy preserves it, or localhost dev)
+      const host = c.req.header("host");
+      if (!host || isLocalHost(host) || host === config.publicUrl.host) return next();
+      return c.text(`Misdirected request: expected host ${config.publicUrl.host}`, 421);
     }
-    return c.text(`Misdirected request: expected host ${expected}`, 421);
+
+    // derived mode: judge by the resolved (proxy-forwarded) host. The raw Host
+    // is the proxy→app hop (often localhost) and isn't meaningful here.
+    if (isLocalHost(c.var.rpId)) return next(); // local dev / internal health checks
+    const pinned = getSetting(db, "rp_id_at_setup");
+    if (!pinned || c.var.rpId === pinned) return next();
+    return c.text(`Misdirected request: this server is bound to host ${pinned}`, 421);
   };
 }
 
 /** Origin allowlist for /mcp per MCP spec (when an Origin header is present). */
-export function mcpOriginGuard(config: Config): MiddlewareHandler {
-  const allowed = new Set([config.origin, "https://claude.ai", "https://claude.com"]);
+export function mcpOriginGuard(): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
     const origin = c.req.header("origin");
-    if (origin && !allowed.has(origin) && !origin.startsWith("http://localhost:") && !origin.startsWith("http://127.0.0.1:")) {
+    if (
+      origin &&
+      origin !== c.var.publicOrigin &&
+      origin !== "https://claude.ai" &&
+      origin !== "https://claude.com" &&
+      !origin.startsWith("http://localhost:") &&
+      !origin.startsWith("http://127.0.0.1:")
+    ) {
       return c.text("Forbidden origin", 403);
     }
     return next();
   };
 }
 
-export function wwwAuthenticate(config: Config, error?: string): string {
-  const meta = `${config.origin}/.well-known/oauth-protected-resource/mcp`;
+export function wwwAuthenticate(origin: string, error?: string): string {
+  const meta = `${origin}/.well-known/oauth-protected-resource/mcp`;
   return `Bearer resource_metadata="${meta}"${error ? `, error="${error}"` : ""}`;
 }
 
 /** Bearer auth for /mcp: static obmcp_ tokens and OAuth obat_ tokens. */
-export function requireBearer(db: Database, config: Config): MiddlewareHandler<AuthEnv> {
+export function requireBearer(db: Database): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
     const header = c.req.header("authorization");
     const token = header?.match(/^Bearer\s+(.+)$/i)?.[1];
     if (!token) {
-      c.header("WWW-Authenticate", wwwAuthenticate(config));
+      c.header("WWW-Authenticate", wwwAuthenticate(c.var.publicOrigin));
       return c.json({ error: "unauthorized", error_description: "Missing bearer token" }, 401);
     }
     const principal = verifyBearer(db, token);
     if (!principal) {
-      c.header("WWW-Authenticate", wwwAuthenticate(config, "invalid_token"));
+      c.header("WWW-Authenticate", wwwAuthenticate(c.var.publicOrigin, "invalid_token"));
       return c.json({ error: "invalid_token", error_description: "Token is invalid, expired, or revoked" }, 401);
     }
     c.set("principal", principal);

@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
-import type { Config } from "../config.ts";
 import type { AuthEnv } from "../auth/middleware.ts";
 import { abortRegistry, hashToken, mintToken } from "../auth/tokens.ts";
 import { isRegistrableRedirectUri, pkceChallengeFromVerifier, redirectUriMatches } from "./policy.ts";
@@ -29,45 +28,45 @@ function getClient(db: Database, clientId: string): ClientRow | null {
   return db.query<ClientRow, [string]>("SELECT * FROM oauth_clients WHERE client_id = ?").get(clientId);
 }
 
-function canonicalResource(config: Config): string {
-  return `${config.origin}/mcp`;
+function canonicalResource(origin: string): string {
+  return `${origin}/mcp`;
 }
 
 // ---------------------------------------------------------------------------
 // Metadata (mounted at /.well-known)
 
-export function wellKnownRouter(config: Config): Hono {
-  const app = new Hono();
-  const prm = {
-    resource: canonicalResource(config),
-    authorization_servers: [config.origin],
+export function wellKnownRouter(): Hono<AuthEnv> {
+  const app = new Hono<AuthEnv>();
+  const prm = (origin: string) => ({
+    resource: `${origin}/mcp`,
+    authorization_servers: [origin],
     bearer_methods_supported: ["header"],
     scopes_supported: ["mcp"],
     resource_name: "Obsidian MCP",
-  };
-  const asMeta = {
-    issuer: config.origin,
-    authorization_endpoint: `${config.origin}/oauth/authorize`,
-    token_endpoint: `${config.origin}/oauth/token`,
-    registration_endpoint: `${config.origin}/oauth/register`,
-    revocation_endpoint: `${config.origin}/oauth/revoke`,
+  });
+  const asMeta = (origin: string) => ({
+    issuer: origin,
+    authorization_endpoint: `${origin}/oauth/authorize`,
+    token_endpoint: `${origin}/oauth/token`,
+    registration_endpoint: `${origin}/oauth/register`,
+    revocation_endpoint: `${origin}/oauth/revoke`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: ["mcp"],
-  };
+  });
   const cache = (c: { header: (k: string, v: string) => void }) => c.header("Cache-Control", "public, max-age=3600");
-  app.get("/oauth-protected-resource", (c) => (cache(c), c.json(prm)));
-  app.get("/oauth-protected-resource/mcp", (c) => (cache(c), c.json(prm)));
-  app.get("/oauth-authorization-server", (c) => (cache(c), c.json(asMeta)));
+  app.get("/oauth-protected-resource", (c) => (cache(c), c.json(prm(c.var.publicOrigin))));
+  app.get("/oauth-protected-resource/mcp", (c) => (cache(c), c.json(prm(c.var.publicOrigin))));
+  app.get("/oauth-authorization-server", (c) => (cache(c), c.json(asMeta(c.var.publicOrigin))));
   return app;
 }
 
 // ---------------------------------------------------------------------------
 // Public endpoints: register / token / revoke
 
-export function oauthPublicRouter(db: Database, config: Config): Hono {
+export function oauthPublicRouter(db: Database): Hono {
   const app = new Hono();
 
   // RFC 7591 Dynamic Client Registration
@@ -269,7 +268,7 @@ interface AuthorizeParams {
 
 function validateAuthorizeRequest(
   db: Database,
-  config: Config,
+  origin: string,
   q: Record<string, string | undefined>,
 ): { ok: true; client: ClientRow; params: AuthorizeParams } | { ok: false; fatal: string } | { ok: false; redirect: string } {
   const clientId = q.client_id ?? "";
@@ -294,8 +293,8 @@ function validateAuthorizeRequest(
   if (q.response_type !== "code") return err("unsupported_response_type", "Only response_type=code is supported");
   if (!q.code_challenge) return err("invalid_request", "PKCE code_challenge is required");
   if ((q.code_challenge_method ?? "") !== "S256") return err("invalid_request", "code_challenge_method must be S256");
-  if (q.resource && q.resource !== canonicalResource(config)) {
-    return err("invalid_target", `resource must be ${canonicalResource(config)}`);
+  if (q.resource && q.resource !== canonicalResource(origin)) {
+    return err("invalid_target", `resource must be ${canonicalResource(origin)}`);
   }
   return {
     ok: true,
@@ -321,12 +320,12 @@ function issueCodeAndRedirect(db: Database, params: AuthorizeParams): string {
   return u.toString();
 }
 
-export function oauthInteractiveRouter(db: Database, config: Config): Hono<AuthEnv> {
+export function oauthInteractiveRouter(db: Database): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
   app.get("/authorize", (c) => {
     const q = Object.fromEntries(new URL(c.req.url).searchParams) as Record<string, string>;
-    const v = validateAuthorizeRequest(db, config, q);
+    const v = validateAuthorizeRequest(db, c.var.publicOrigin, q);
     if (!v.ok) {
       if ("redirect" in v) return c.redirect(v.redirect);
       return c.html(OAuthErrorPage({ message: v.fatal }), 400);
@@ -343,7 +342,7 @@ export function oauthInteractiveRouter(db: Database, config: Config): Hono<AuthE
     for (const k of ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "response_type", "resource", "scope"]) {
       if (typeof body[k] === "string" && body[k]) q[k] = body[k] as string;
     }
-    const v = validateAuthorizeRequest(db, config, q);
+    const v = validateAuthorizeRequest(db, c.var.publicOrigin, q);
     if (!v.ok) {
       if ("redirect" in v) return c.redirect(v.redirect);
       return c.html(OAuthErrorPage({ message: v.fatal }), 400);

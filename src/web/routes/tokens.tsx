@@ -107,7 +107,7 @@ function NewTokenResult(props: { token: string; name: string }) {
 export function tokensRouter(db: Database, config: Config): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
-  app.get("/", (c) => c.html(<TokensPage tokens={listApiTokens(db)} mcpUrl={`${config.origin}/mcp`} />));
+  app.get("/", (c) => c.html(<TokensPage tokens={listApiTokens(db)} mcpUrl={`${c.var.publicOrigin}/mcp`} />));
 
   app.post("/", async (c) => {
     const body = await c.req.parseBody();

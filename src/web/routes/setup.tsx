@@ -3,7 +3,7 @@ import { setCookie } from "hono/cookie";
 import type { Database } from "bun:sqlite";
 import type { Config } from "../../config.ts";
 import { Layout } from "../layout.tsx";
-import { SESSION_COOKIE } from "../../auth/middleware.ts";
+import { SESSION_COOKIE, type AuthEnv } from "../../auth/middleware.ts";
 import { safeEqual } from "../../auth/tokens.ts";
 import { createSession } from "../../auth/sessions.ts";
 import { finishRegistration, passkeyCount, startRegistration } from "../../auth/webauthn.ts";
@@ -61,8 +61,8 @@ function SetupPage() {
   );
 }
 
-export function setupRouter(db: Database, config: Config, state: SetupState): Hono {
-  const app = new Hono();
+export function setupRouter(db: Database, config: Config, state: SetupState): Hono<AuthEnv> {
+  const app = new Hono<AuthEnv>();
 
   // whole router 404s once a passkey exists
   app.use("*", async (c, next) => {
@@ -78,7 +78,7 @@ export function setupRouter(db: Database, config: Config, state: SetupState): Ho
     if (!state.token || !token || !safeEqual(token, state.token)) {
       return c.json({ error: "Invalid setup token. Check the server logs for the current token (it changes on restart)." }, 403);
     }
-    const { options, challengeId, userHandle } = await startRegistration(db, config);
+    const { options, challengeId, userHandle } = await startRegistration(db, { rpId: c.var.rpId, origin: c.var.publicOrigin });
     state.pendingUserHandle = userHandle;
     return c.json({ options, challengeId });
   });
@@ -92,7 +92,7 @@ export function setupRouter(db: Database, config: Config, state: SetupState): Ho
     if (!state.pendingUserHandle) return c.json({ error: "No registration in progress — reload and try again." }, 400);
     const result = await finishRegistration(
       db,
-      config,
+      { rpId: c.var.rpId, origin: c.var.publicOrigin },
       body.response,
       body.challengeId,
       String(body.name ?? "").trim() || "First passkey",
@@ -100,13 +100,13 @@ export function setupRouter(db: Database, config: Config, state: SetupState): Ho
     );
     if ("error" in result) return c.json(result, 400);
     setSetting(db, "setup_complete", "1");
-    setSetting(db, "rp_id_at_setup", config.rpId);
+    // rp_id_at_setup is pinned inside finishRegistration
     state.token = null;
     state.pendingUserHandle = null;
     const session = createSession(db, 1, c.req.header("user-agent"));
     setCookie(c, SESSION_COOKIE, session, {
       httpOnly: true,
-      secure: config.publicUrl.protocol === "https:",
+      secure: c.var.secureCookies,
       sameSite: "Lax",
       path: "/",
       maxAge: 30 * 24 * 3600,

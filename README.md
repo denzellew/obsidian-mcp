@@ -77,7 +77,7 @@ Design notes:
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `PUBLIC_URL` | — (**required** in production) | External URL; drives passkey rpID, OAuth issuer, host checks |
+| `PUBLIC_URL` | — (optional) | Pin the external URL. **Leave unset** to auto-derive it from your reverse proxy's `X-Forwarded-Proto`/`X-Forwarded-Host` per request (the common case behind a single tunnel). Set it only when you want to hard-pin the origin or run behind multiple/untrusted proxies. |
 | `PORT` | `3000` | Listen port |
 | `DATA_DIR` | `/data` | Root for all persistent state |
 | `VAULT_DIR` | `$DATA_DIR/Vault` | Vault location |
@@ -92,6 +92,7 @@ Design notes:
 
 - Management UI: **passkeys only**, user verification required, discoverable credentials (one-tap). Sessions are DB-backed, HttpOnly, SameSite=Lax cookies.
 - First-run trust: `/setup` requires a token printed to server logs (proof of box ownership); the page 404s once a passkey exists.
+- Hostname handling: when `PUBLIC_URL` is unset the origin/rpID are derived from the proxy's forwarded headers, and the WebAuthn rpID is **pinned** at first-passkey setup — a later request arriving with a different host is rejected (use `AUTH_RESET=1` to re-key if the hostname legitimately changes). WebAuthn's crypto binds each credential to the browser-signed origin regardless, so a forged forwarded header cannot impersonate your host.
 - MCP: OAuth 2.1 (PKCE S256 mandatory, RFC 8414/9728 metadata, RFC 7591 DCR, refresh rotation with reuse detection) **or** static bearer tokens. All tokens stored as SHA-256 hashes, shown once, revocable from the UI; revocation also kills live streams.
 - Host-header guard (DNS rebinding), Origin checks on `/mcp`, CSRF protection on the UI, rate-limited auth endpoints.
 - `data/db/app.db` contains only hashes and public keys — safe to back up.
