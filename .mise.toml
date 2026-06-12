@@ -4,7 +4,9 @@ node = "22"
 
 [env]
 DATA_DIR = "{{config_root}}/data"
-PUBLIC_URL = "http://localhost:3000"
+# PUBLIC_URL intentionally unset: dev runs in proxy-derived mode, matching
+# production. Direct localhost hits resolve to http://localhost:3000; requests
+# through a tunnel use the forwarded host. Set it only to hard-pin the origin.
 
 [tasks."dev:server"]
 run = "bun --watch src/server.ts"
