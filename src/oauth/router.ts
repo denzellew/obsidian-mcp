@@ -5,6 +5,7 @@ import type { AuthEnv } from "../auth/middleware.ts";
 import { abortRegistry, hashToken, mintToken } from "../auth/tokens.ts";
 import { isRegistrableRedirectUri, pkceChallengeFromVerifier, redirectUriMatches } from "./policy.ts";
 import { ConsentPage, OAuthErrorPage } from "../web/routes/consent.tsx";
+import { recordAdmin } from "../audit.ts";
 import { logger } from "../log.ts";
 
 const log = logger("oauth");
@@ -355,6 +356,7 @@ export function oauthInteractiveRouter(db: Database): Hono<AuthEnv> {
       return c.redirect(u.toString());
     }
     db.query("UPDATE oauth_clients SET consented_at = unixepoch() WHERE client_id = ?").run(v.params.client_id);
+    recordAdmin(db, "oauth.consent", { target: v.client.client_name });
     return c.redirect(issueCodeAndRedirect(db, v.params));
   });
 

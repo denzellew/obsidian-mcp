@@ -28,7 +28,7 @@ import { syncRouter } from "./web/routes/sync.tsx";
 import { snapshotsRouter } from "./web/routes/snapshots.tsx";
 import { auditRouter } from "./web/routes/audit.tsx";
 import { guidanceRouter } from "./web/routes/guidance.tsx";
-import { recordAudit } from "./mcp/audit.ts";
+import { recordMcpCall } from "./audit.ts";
 import type { SyncSupervisor } from "./sync/supervisor.ts";
 
 export interface AppDeps {
@@ -90,7 +90,7 @@ export function createApp(deps: AppDeps) {
     const principal = c.var.principal!;
     const server = createMcpServer(deps.vaultCtx, {
       onToolCall: (tool, args, result) =>
-        recordAudit(
+        recordMcpCall(
           db,
           principal,
           tool,
@@ -116,7 +116,7 @@ export function createApp(deps: AppDeps) {
   app.route("/app/audit", auditRouter(db));
   app.route("/app/guidance", guidanceRouter(db));
   if (deps.sync) app.route("/app/sync", syncRouter(db, config, deps.sync));
-  app.route("/app/snapshots", snapshotsRouter(deps.vaultCtx));
+  app.route("/app/snapshots", snapshotsRouter(deps.vaultCtx, db));
   app.route("/app", dashboardRouter(deps));
 
   app.get("/", (c) => c.redirect("/app"));

@@ -5,6 +5,7 @@ import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import { deleteOtherSessions } from "../../auth/sessions.ts";
 import { deletePasskey, finishRegistration, listPasskeys, startRegistration, type PasskeyRow } from "../../auth/webauthn.ts";
+import { recordAdmin } from "../../audit.ts";
 
 function ago(unix: number | null): string {
   if (!unix) return "never";
@@ -119,11 +120,14 @@ export function passkeysRouter(db: Database, config: Config): Hono<AuthEnv> {
     );
     pendingUserHandle = null;
     if ("error" in result) return c.json(result, 400);
+    recordAdmin(db, "passkey.add", { target: String(body.name ?? "").trim() || "Unnamed passkey" });
     return c.json({ ok: true });
   });
 
   app.delete("/:id", (c) => {
-    const result = deletePasskey(db, decodeURIComponent(c.req.param("id")));
+    const id = decodeURIComponent(c.req.param("id"));
+    const name = listPasskeys(db).find((p) => p.id === id)?.name ?? id;
+    const result = deletePasskey(db, id);
     if ("error" in result) {
       return c.html(
         <>
@@ -132,12 +136,14 @@ export function passkeysRouter(db: Database, config: Config): Hono<AuthEnv> {
         </>,
       );
     }
+    recordAdmin(db, "passkey.delete", { target: name });
     return c.html(<PasskeyList passkeys={listPasskeys(db)} />);
   });
 
   app.post("/sessions/clear-others", (c) => {
     const cookie = c.var.sessionCookie;
     if (cookie) deleteOtherSessions(db, cookie);
+    recordAdmin(db, "session.revoke_others");
     return c.redirect("/app/passkeys");
   });
 

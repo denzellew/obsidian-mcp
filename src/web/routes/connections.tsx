@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import { listConnections, revokeClient, type ConnectionRow } from "../../oauth/router.ts";
+import { recordAdmin } from "../../audit.ts";
 
 function ago(unix: number | null): string {
   if (!unix) return "never";
@@ -67,7 +68,10 @@ export function connectionsRouter(db: Database): Hono<AuthEnv> {
   );
 
   app.delete("/:clientId", (c) => {
-    revokeClient(db, decodeURIComponent(c.req.param("clientId")));
+    const clientId = decodeURIComponent(c.req.param("clientId"));
+    const name = listConnections(db).find((conn) => conn.client_id === clientId)?.client_name ?? clientId;
+    revokeClient(db, clientId);
+    recordAdmin(db, "oauth.revoke", { target: name });
     return c.html(<ConnectionList connections={listConnections(db)} />);
   });
 

@@ -6,6 +6,8 @@ import { Layout } from "../layout.tsx";
 import { SESSION_COOKIE, safeReturnTo, type AuthEnv } from "../../auth/middleware.ts";
 import { createSession, deleteSession } from "../../auth/sessions.ts";
 import { finishAuthentication, passkeyCount, startAuthentication } from "../../auth/webauthn.ts";
+import { recordAdmin } from "../../audit.ts";
+import { clientIp } from "../../auth/middleware.ts";
 
 function LoginPage(props: { returnTo: string }) {
   return (
@@ -45,7 +47,11 @@ export function loginRouter(db: Database, config: Config): Hono<AuthEnv> {
   app.post("/login/webauthn/verify", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const result = await finishAuthentication(db, { rpId: c.var.rpId, origin: c.var.publicOrigin }, body.response, body.challengeId);
-    if ("error" in result) return c.json(result, 401);
+    if ("error" in result) {
+      recordAdmin(db, "login", { status: "error", detail: clientIp(c) });
+      return c.json(result, 401);
+    }
+    recordAdmin(db, "login", { detail: clientIp(c) });
     const session = createSession(db, result.userId, c.req.header("user-agent"));
     setCookie(c, SESSION_COOKIE, session, {
       httpOnly: true,
@@ -66,6 +72,7 @@ export function loginRouter(db: Database, config: Config): Hono<AuthEnv> {
     const cookie = getCookie(c, SESSION_COOKIE);
     if (cookie) deleteSession(db, cookie);
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    recordAdmin(db, "logout");
     return c.redirect("/login");
   });
 

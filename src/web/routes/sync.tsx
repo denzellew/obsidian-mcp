@@ -6,6 +6,7 @@ import type { AuthEnv } from "../../auth/middleware.ts";
 import type { SyncSupervisor } from "../../sync/supervisor.ts";
 import { getSetting, setSetting, deleteSetting } from "../../db/index.ts";
 import { obInstalled, obListRemoteVaults, obLogin, obLogout, obSyncSetup, obSyncUnlink } from "../../sync/ob.ts";
+import { recordAdmin } from "../../audit.ts";
 
 function StateBadge(props: { state: string }) {
   const color =
@@ -163,8 +164,10 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
     if (!email || !password) return c.html(<WizardLogin error="Email and password are required." />);
     const result = await obLogin(config, email, password, mfa);
     if (!result.ok) {
+      recordAdmin(db, "sync.login", { status: "error", target: email });
       return c.html(<WizardLogin error={`Login failed: ${(result.stderr || result.stdout).trim().slice(0, 500)}`} />);
     }
+    recordAdmin(db, "sync.login", { target: email });
     const listing = await obListRemoteVaults(config);
     if (!listing.ok) {
       return c.html(<WizardLogin error={`Signed in, but listing vaults failed: ${(listing.stderr || listing.stdout).trim().slice(0, 500)}`} />);
@@ -191,6 +194,7 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
       );
     }
     setSetting(db, "sync_configured", "1");
+    recordAdmin(db, "sync.configure", { target: vault });
     sync.start();
     c.header("HX-Redirect", "/app/sync");
     return c.html(<p>Connected.</p>);
@@ -198,16 +202,19 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
 
   app.post("/start", (c) => {
     sync.start();
+    recordAdmin(db, "sync.start");
     return c.redirect("/app/sync");
   });
 
   app.post("/stop", async (c) => {
     await sync.stop();
+    recordAdmin(db, "sync.stop");
     return c.redirect("/app/sync");
   });
 
   app.post("/restart", async (c) => {
     await sync.restart();
+    recordAdmin(db, "sync.restart");
     return c.redirect("/app/sync");
   });
 
@@ -216,6 +223,7 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
     await obSyncUnlink(config);
     await obLogout(config);
     deleteSetting(db, "sync_configured");
+    recordAdmin(db, "sync.unlink");
     return c.redirect("/app/sync");
   });
 

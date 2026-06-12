@@ -13,19 +13,28 @@ import { LinkIndex } from "../src/vault/links.ts";
 import { Snapshotter } from "../src/snapshots/snapshotter.ts";
 import { createVaultContext } from "../src/mcp/context.ts";
 import { buildInstructions } from "../src/mcp/server.ts";
-import { categorize, summarize, listAudit } from "../src/mcp/audit.ts";
+import { categorize, summarize, listAudit, recordAdmin } from "../src/audit.ts";
 import { createApiToken } from "../src/auth/tokens.ts";
 import { fixtureVault, type TmpVault } from "./helpers.ts";
 import type { Database } from "bun:sqlite";
 
 describe("audit categorize/summarize", () => {
-  test("categories by tool and action", () => {
-    expect(categorize("read_note", "read_note")).toBe("read");
-    expect(categorize("create_note", "create_note")).toBe("create");
-    expect(categorize("edit_note", "edit:append")).toBe("edit");
-    expect(categorize("manage_note", "manage_note:delete")).toBe("delete");
-    expect(categorize("manage_note", "manage_note:move")).toBe("move");
-    expect(categorize("daily_note", "daily_note:append")).toBe("daily");
+  test("agent categories by tool and action", () => {
+    expect(categorize("agent", "read_note", "read_note")).toBe("read");
+    expect(categorize("agent", "create_note", "create_note")).toBe("create");
+    expect(categorize("agent", "edit_note", "edit:append")).toBe("edit");
+    expect(categorize("agent", "manage_note", "manage_note:delete")).toBe("delete");
+    expect(categorize("agent", "manage_note", "manage_note:move")).toBe("move");
+    expect(categorize("agent", "daily_note", "daily_note:append")).toBe("daily");
+  });
+
+  test("owner categories by event", () => {
+    expect(categorize("security", "login", null)).toBe("session");
+    expect(categorize("security", "passkey.add", null)).toBe("create");
+    expect(categorize("security", "token.revoke", null)).toBe("delete");
+    expect(categorize("security", "oauth.consent", null)).toBe("auth");
+    expect(categorize("config", "sync.configure", null)).toBe("config");
+    expect(categorize("config", "snapshot.restore", null)).toBe("edit");
   });
 
   test("summarize derives action + target", () => {
@@ -117,23 +126,37 @@ describe("audit + guidance end-to-end", () => {
     await client.callTool({ name: "read_note", arguments: { path: "DoesNotExist" } }); // error path
 
     const all = listAudit(db, { limit: 100 });
-    const byTool = (t: string) => all.find((e) => e.tool === t)!;
+    const byTool = (t: string) => all.find((e) => e.event === t)!;
 
-    expect(byTool("search_vault")).toMatchObject({ actor_name: "Claude Code on laptop", target: "proxmox", status: "ok" });
+    expect(byTool("search_vault")).toMatchObject({ source: "agent", actor_name: "Claude Code on laptop", target: "proxmox", status: "ok" });
     expect(byTool("create_note")).toMatchObject({ action: "create_note", target: "Audit/Test", status: "ok" });
 
-    const failedRead = all.find((e) => e.tool === "read_note" && e.status === "error")!;
+    const failedRead = all.find((e) => e.event === "read_note" && e.status === "error")!;
     expect(failedRead).toBeDefined();
     expect(failedRead.detail).toContain("NOT_FOUND");
 
-    // writes-only filter excludes the reads/searches
-    const writes = listAudit(db, { limit: 100, writesOnly: true });
-    expect(writes.some((e) => e.tool === "create_note")).toBe(true);
-    expect(writes.some((e) => e.tool === "search_vault")).toBe(false);
+    // agent-source filter shows tool calls, not owner actions
+    const agent = listAudit(db, { limit: 100, source: "agent" });
+    expect(agent.every((e) => e.source === "agent")).toBe(true);
+    expect(agent.some((e) => e.event === "create_note")).toBe(true);
   });
 
-  test("audit page renders with badges", async () => {
-    // seed a session and hit the page through the app
+  test("owner actions are recorded under security/config sources", () => {
+    recordAdmin(db, "token.create", { target: "ci token" });
+    recordAdmin(db, "login");
+    recordAdmin(db, "sync.configure", { target: "My Vault" });
+
+    const security = listAudit(db, { limit: 100, source: "security" });
+    expect(security.find((e) => e.event === "token.create")).toMatchObject({ actor_name: "owner", target: "ci token" });
+    expect(security.some((e) => e.event === "login")).toBe(true);
+    // sync.* lands in config, not security
+    expect(security.some((e) => e.event === "sync.configure")).toBe(false);
+
+    const config = listAudit(db, { limit: 100, source: "config" });
+    expect(config.find((e) => e.event === "sync.configure")).toMatchObject({ target: "My Vault" });
+  });
+
+  test("activity page renders with source tabs and badges", async () => {
     db.query("INSERT OR IGNORE INTO users (id, display_name, user_handle) VALUES (1, 'Owner', X'00')").run();
     const { createSession } = await import("../src/auth/sessions.ts");
     const { SESSION_COOKIE } = await import("../src/auth/middleware.ts");
@@ -141,7 +164,11 @@ describe("audit + guidance end-to-end", () => {
     const res = await fetch(`http://localhost:${server.port}/app/audit`, { headers: { Cookie: cookie } });
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("MCP activity");
+    expect(html).toContain("Activity");
     expect(html).toContain("create_note");
+
+    const sec = await fetch(`http://localhost:${server.port}/app/audit?tab=security`, { headers: { Cookie: cookie } });
+    const secHtml = await sec.text();
+    expect(secHtml).toContain("token.create");
   });
 });

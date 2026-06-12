@@ -10,7 +10,7 @@ import { Snapshotter } from "./snapshots/snapshotter.ts";
 import { createVaultContext } from "./mcp/context.ts";
 import { passkeyCount } from "./auth/webauthn.ts";
 import { sweepExpired } from "./auth/sessions.ts";
-import { pruneAudit } from "./mcp/audit.ts";
+import { pruneAudit } from "./audit.ts";
 import { SyncSupervisor } from "./sync/supervisor.ts";
 import type { SetupState } from "./web/routes/setup.tsx";
 import { logger } from "./log.ts";

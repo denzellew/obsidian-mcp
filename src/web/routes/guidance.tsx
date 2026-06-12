@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import { getSetting, setSetting, deleteSetting } from "../../db/index.ts";
+import { recordAdmin } from "../../audit.ts";
 
 const MAX_LEN = 8000;
 
@@ -57,6 +58,7 @@ export function guidanceRouter(db: Database): Hono<AuthEnv> {
     const value = String(body.guidance ?? "").trim().slice(0, MAX_LEN);
     if (value) setSetting(db, "vault_instructions", value);
     else deleteSetting(db, "vault_instructions");
+    recordAdmin(db, "guidance.update", { detail: value ? `${value.length} chars` : "cleared" });
     return c.html(<span class="text-sm text-success">Saved — applies to new MCP sessions.</span>);
   });
 

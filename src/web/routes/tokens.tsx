@@ -4,6 +4,7 @@ import type { Config } from "../../config.ts";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import { createApiToken, listApiTokens, revokeApiToken, type ApiTokenRow } from "../../auth/tokens.ts";
+import { recordAdmin } from "../../audit.ts";
 
 function ago(unix: number | null): string {
   if (!unix) return "never";
@@ -114,6 +115,7 @@ export function tokensRouter(db: Database, config: Config): Hono<AuthEnv> {
     const name = String(body.name ?? "").trim().slice(0, 100);
     if (!name) return c.html(<p class="mt-3 text-sm text-danger">Name is required.</p>);
     const { token } = createApiToken(db, name);
+    recordAdmin(db, "token.create", { target: name });
     c.header("HX-Trigger", "tokenCreated");
     return c.html(
       <>
@@ -126,7 +128,9 @@ export function tokensRouter(db: Database, config: Config): Hono<AuthEnv> {
   app.get("/list", (c) => c.html(<TokenTable tokens={listApiTokens(db)} />));
 
   app.delete("/:id", (c) => {
-    revokeApiToken(db, c.req.param("id"));
+    const id = c.req.param("id");
+    const name = listApiTokens(db).find((t) => t.id === id)?.name ?? id;
+    if (revokeApiToken(db, id)) recordAdmin(db, "token.revoke", { target: name });
     return c.html(<TokenTable tokens={listApiTokens(db)} />);
   });
 

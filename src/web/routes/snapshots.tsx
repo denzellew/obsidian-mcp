@@ -1,8 +1,10 @@
 import { Hono } from "hono";
+import type { Database } from "bun:sqlite";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import type { VaultContext } from "../../mcp/context.ts";
 import { safePath } from "../../vault/paths.ts";
+import { recordAdmin } from "../../audit.ts";
 
 function ago(iso: string): string {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -12,7 +14,7 @@ function ago(iso: string): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export function snapshotsRouter(ctx: VaultContext): Hono<AuthEnv> {
+export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
   app.get("/", async (c) => {
@@ -167,6 +169,7 @@ export function snapshotsRouter(ctx: VaultContext): Hono<AuthEnv> {
     // snapshot — history is never rewritten
     await ctx.store.write(path, content);
     await ctx.snapshotter.commit(`restore: ${path} from ${sha.slice(0, 7)}`);
+    recordAdmin(db, "snapshot.restore", { target: path, detail: `from ${sha.slice(0, 7)}` });
     return c.redirect(`/app/snapshots?path=${encodeURIComponent(path)}`);
   });
 

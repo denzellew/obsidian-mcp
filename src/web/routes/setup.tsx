@@ -8,6 +8,7 @@ import { safeEqual } from "../../auth/tokens.ts";
 import { createSession } from "../../auth/sessions.ts";
 import { finishRegistration, passkeyCount, startRegistration } from "../../auth/webauthn.ts";
 import { setSetting } from "../../db/index.ts";
+import { recordAdmin } from "../../audit.ts";
 
 export interface SetupState {
   /** In-memory only; regenerated each boot until setup completes. */
@@ -100,6 +101,7 @@ export function setupRouter(db: Database, config: Config, state: SetupState): Ho
     );
     if ("error" in result) return c.json(result, 400);
     setSetting(db, "setup_complete", "1");
+    recordAdmin(db, "setup.complete", { detail: `rpID ${c.var.rpId}` });
     // rp_id_at_setup is pinned inside finishRegistration
     state.token = null;
     state.pendingUserHandle = null;
