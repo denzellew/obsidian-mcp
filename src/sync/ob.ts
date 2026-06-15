@@ -88,12 +88,20 @@ export async function obSyncSetup(
   vault: string,
   password?: string,
   deviceName = "obsidian-mcp",
-  configs: string = ALL_SYNC_CONFIGS,
 ): Promise<ObResult> {
   const args = ["sync-setup", "--vault", vault, "--path", config.vaultDir, "--device-name", deviceName];
   if (password) args.push("--password", password);
-  if (configs) args.push("--configs", configs);
   return runOb(config, args);
+}
+
+/**
+ * Reconfigure an already-linked vault — `--configs` lives here, NOT on
+ * sync-setup. Runs against the existing link in place (no re-download), so it's
+ * how config syncing gets turned on for a vault that's already set up. The
+ * daemon should be stopped first; ob holds a per-vault lock while syncing.
+ */
+export async function obSyncConfig(config: Config, configs: string = ALL_SYNC_CONFIGS): Promise<ObResult> {
+  return runOb(config, ["sync-config", "--path", config.vaultDir, "--configs", configs]);
 }
 
 export async function obSyncStatus(config: Config): Promise<ObResult> {

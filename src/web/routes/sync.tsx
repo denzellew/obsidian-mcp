@@ -5,7 +5,7 @@ import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import type { SyncSupervisor } from "../../sync/supervisor.ts";
 import { getSetting, setSetting, deleteSetting } from "../../db/index.ts";
-import { obInstalled, obListRemoteVaults, obLogin, obLogout, obSyncSetup, obSyncUnlink } from "../../sync/ob.ts";
+import { obInstalled, obListRemoteVaults, obLogin, obLogout, obSyncConfig, obSyncSetup, obSyncUnlink } from "../../sync/ob.ts";
 import { recordAdmin } from "../../audit.ts";
 
 function StateBadge(props: { state: string }) {
@@ -196,6 +196,11 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
     }
     setSetting(db, "sync_configured", "1");
     recordAdmin(db, "sync.configure", { target: vault });
+    // Enable config syncing (plugins, appearance, hotkeys) on the fresh link.
+    // sync-config is a separate ob command; failure here is non-fatal — the
+    // vault is linked, config sync just stays off and can be enabled later.
+    const cfg = await obSyncConfig(config);
+    recordAdmin(db, "sync.config", cfg.ok ? {} : { status: "error" });
     sync.start();
     c.header("HX-Redirect", "/app/sync");
     return c.html(<p>Connected.</p>);
