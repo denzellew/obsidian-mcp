@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { VaultContext } from "../context.ts";
 import { guarded, ok } from "../respond.ts";
-import { dailyNotePath } from "../../vault/obsidian-config.ts";
+import { dailyNotePath, readVaultConfig } from "../../vault/obsidian-config.ts";
 import { isMarkdown } from "../../vault/paths.ts";
 
 export function registerVaultInfo(server: McpServer, ctx: VaultContext) {
@@ -10,8 +10,8 @@ export function registerVaultInfo(server: McpServer, ctx: VaultContext) {
     {
       title: "Vault info",
       description:
-        "Orientation for this vault — call this FIRST in a session. Returns note/attachment/folder counts, the daily-notes configuration (folder, date format, whether today's note exists), available templates, attachment folder, link-format settings, and the most recently modified notes. " +
-        "Use it to learn where things live before creating or searching.",
+        "Orientation for this vault — call this FIRST in a session. Returns note/attachment/folder counts, the daily-notes configuration (folder, date format, whether today's note exists), available templates, attachment folder, link-format settings, a summary of installed plugins, and the most recently modified notes. " +
+        "Use it to learn where things live before creating or searching. If plugins are listed, call vault_config for the full setup (versions, theme, hotkeys).",
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
@@ -59,6 +59,9 @@ export function registerVaultInfo(server: McpServer, ctx: VaultContext) {
         dailyFormatError = err instanceof Error ? err.message : String(err);
       }
 
+      const cfg = readVaultConfig(ctx.store.vaultDir);
+      const enabledCommunity = cfg.communityPlugins.filter((p) => p.enabled);
+
       return ok({
         vault_name: ctx.vaultName,
         counts: { notes, attachments, folders: folders.size, total_bytes: totalBytes },
@@ -75,6 +78,12 @@ export function registerVaultInfo(server: McpServer, ctx: VaultContext) {
         attachment_folder: settings.attachmentFolder,
         link_format: settings.newLinkFormat,
         uses_markdown_links: settings.useMarkdownLinks,
+        plugins: {
+          core_enabled: cfg.corePlugins.length,
+          community_enabled: enabledCommunity.length,
+          community_names: enabledCommunity.map((p) => p.name),
+          hint: enabledCommunity.length ? "Call vault_config for versions, theme, and hotkeys." : undefined,
+        },
         recently_modified: recent.slice(0, 5),
         ...(ctx.ownerGuidance()?.trim() ? { owner_guidance: ctx.ownerGuidance()!.trim() } : {}),
       });

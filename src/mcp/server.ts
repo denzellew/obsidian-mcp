@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { VaultContext } from "./context.ts";
 import { registerVaultInfo } from "./tools/vault-info.ts";
+import { registerVaultConfig } from "./tools/vault-config.ts";
 import { registerBrowseVault } from "./tools/browse-vault.ts";
 import { registerSearchVault } from "./tools/search-vault.ts";
 import { registerReadNote } from "./tools/read-note.ts";
@@ -26,11 +27,22 @@ export interface McpServerOptions {
   onToolCall?: (tool: string, args: Record<string, unknown>, result: CallToolResult) => void;
 }
 
-/** Compose the base instructions with the owner's vault-specific guidance. */
+/**
+ * Compose the base instructions with vault-specific guidance: the in-vault
+ * AGENTS.md (synced, the owner's source of truth) and any guidance set in the
+ * management UI. Both are optional and appended under their own headings.
+ */
 export function buildInstructions(ctx: VaultContext): string {
+  let out = SERVER_INSTRUCTIONS;
+  const agents = ctx.vaultGuide()?.trim();
+  if (agents) {
+    out += `\n\n## Vault guide (AGENTS.md)\nThe vault's own AGENTS.md — follow it when working in the vault:\n\n${agents}`;
+  }
   const guidance = ctx.ownerGuidance()?.trim();
-  if (!guidance) return SERVER_INSTRUCTIONS;
-  return `${SERVER_INSTRUCTIONS}\n\n## Vault-specific guidance from the owner\nFollow this when working in the vault:\n\n${guidance}`;
+  if (guidance) {
+    out += `\n\n## Vault-specific guidance from the owner\nFollow this when working in the vault:\n\n${guidance}`;
+  }
+  return out;
 }
 
 export function createMcpServer(ctx: VaultContext, opts: McpServerOptions = {}): McpServer {
@@ -54,6 +66,7 @@ export function createMcpServer(ctx: VaultContext, opts: McpServerOptions = {}):
   }
 
   registerVaultInfo(server, ctx);
+  registerVaultConfig(server, ctx);
   registerBrowseVault(server, ctx);
   registerSearchVault(server, ctx);
   registerReadNote(server, ctx);

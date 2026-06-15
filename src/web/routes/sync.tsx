@@ -92,7 +92,8 @@ function WizardPickVault(props: { vaultListing: string; error?: string }) {
           class="w-full rounded-md border border-base-600 bg-base-800 px-3 py-2 text-sm focus:border-accent focus:outline-none" />
         <p class="text-xs text-warning">
           Heads-up: connecting downloads the remote vault into this server's vault directory and starts bidirectional
-          sync. If this server's vault already has notes, they will sync up to the remote vault too.
+          sync. If this server's vault already has notes, they will sync up to the remote vault too. Vault configuration
+          (plugins, appearance, hotkeys) is also synced so it can be read via the MCP <span class="font-mono">vault_config</span> tool; the server never edits config.
         </p>
         <button type="submit" class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover">
           Connect vault &amp; start sync

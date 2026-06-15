@@ -66,7 +66,7 @@ afterAll(async () => {
 });
 
 describe("MCP integration", () => {
-  test("lists all 10 tools with annotations", async () => {
+  test("lists all 11 tools with annotations", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
@@ -79,6 +79,7 @@ describe("MCP integration", () => {
       "manage_note",
       "read_note",
       "search_vault",
+      "vault_config",
       "vault_info",
     ]);
     const read = tools.find((t) => t.name === "read_note")!;
@@ -94,6 +95,25 @@ describe("MCP integration", () => {
     expect(r.daily_notes.today_path).toBe("Journal/2026-06-12.md");
     expect(r.templates.names).toContain("Daily");
     expect(r.link_format).toBe("shortest");
+    expect(r.plugins.community_enabled).toBe(2);
+    expect(r.plugins.community_names).toContain("Dataview");
+  });
+
+  test("vault_config reports plugins and appearance", async () => {
+    const r = jsonOf((await client.callTool({ name: "vault_config", arguments: {} })) as CallToolResult);
+    expect(r.present).toBe(true);
+    expect(r.core_plugins).toContain("daily-notes");
+    expect(r.core_plugins).not.toContain("graph"); // disabled
+    const dv = r.community_plugins.find((p: any) => p.id === "dataview");
+    expect(dv.name).toBe("Dataview");
+    expect(dv.version).toBe("0.5.64");
+    expect(dv.enabled).toBe(true);
+    // enabled but no folder on disk → still reported
+    const tasks = r.community_plugins.find((p: any) => p.id === "obsidian-tasks-plugin");
+    expect(tasks.enabled).toBe(true);
+    expect(r.appearance.mode).toBe("obsidian");
+    expect(r.appearance.css_theme).toBe("Minimal");
+    expect(r.customized_hotkeys).toContain("editor:toggle-bold");
   });
 
   test("search_vault finds and highlights", async () => {

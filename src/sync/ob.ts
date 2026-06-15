@@ -74,14 +74,25 @@ export async function obListRemoteVaults(config: Config): Promise<ObResult> {
   return runOb(config, ["sync-list-remote"]);
 }
 
+/**
+ * Obsidian Sync config categories. Syncing all of them pulls the owner's full
+ * .obsidian/ setup (plugins, appearance, hotkeys) into the vault so it can be
+ * surfaced read-only via the vault_config MCP tool. The MCP server itself never
+ * writes config, but sync is bidirectional — see the wizard warning.
+ */
+export const ALL_SYNC_CONFIGS =
+  "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data";
+
 export async function obSyncSetup(
   config: Config,
   vault: string,
   password?: string,
   deviceName = "obsidian-mcp",
+  configs: string = ALL_SYNC_CONFIGS,
 ): Promise<ObResult> {
   const args = ["sync-setup", "--vault", vault, "--path", config.vaultDir, "--device-name", deviceName];
   if (password) args.push("--password", password);
+  if (configs) args.push("--configs", configs);
   return runOb(config, args);
 }
 

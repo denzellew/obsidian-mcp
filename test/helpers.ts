@@ -52,6 +52,11 @@ export function fixtureVault(): TmpVault {
     ".obsidian/app.json": JSON.stringify({ newLinkFormat: "shortest", useMarkdownLinks: false, attachmentFolderPath: "Attachments" }),
     ".obsidian/daily-notes.json": JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", template: "Templates/Daily" }),
     ".obsidian/templates.json": JSON.stringify({ folder: "Templates" }),
+    ".obsidian/core-plugins.json": JSON.stringify({ "file-explorer": true, "daily-notes": true, graph: false }),
+    ".obsidian/community-plugins.json": JSON.stringify(["dataview", "obsidian-tasks-plugin"]),
+    ".obsidian/plugins/dataview/manifest.json": JSON.stringify({ id: "dataview", name: "Dataview", version: "0.5.64", description: "Query your notes.", author: "blacksmithgu" }),
+    ".obsidian/appearance.json": JSON.stringify({ theme: "obsidian", cssTheme: "Minimal", baseFontSize: 16, enabledCssSnippets: ["tweaks"] }),
+    ".obsidian/hotkeys.json": JSON.stringify({ "editor:toggle-bold": [{ modifiers: ["Mod"], key: "B" }] }),
     "Templates/Daily.md": "# {{date}}\n\n## Log\n\n## Notes\n",
     ".trash/Old Note.md": "deleted content\n",
   });

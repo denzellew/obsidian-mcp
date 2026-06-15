@@ -51,18 +51,29 @@ describe("audit categorize/summarize", () => {
 });
 
 describe("buildInstructions", () => {
-  function ctx(guidance: string | null) {
-    return { ownerGuidance: () => guidance } as Parameters<typeof buildInstructions>[0];
+  function ctx(guidance: string | null, vaultGuide: string | null = null) {
+    return { ownerGuidance: () => guidance, vaultGuide: () => vaultGuide } as Parameters<typeof buildInstructions>[0];
   }
   test("base only when no guidance", () => {
     const out = buildInstructions(ctx(null));
     expect(out).toContain("Obsidian vault server");
     expect(out).not.toContain("Vault-specific guidance");
+    expect(out).not.toContain("AGENTS.md");
   });
   test("appends owner guidance", () => {
     const out = buildInstructions(ctx("Weekly notes live in Journal/Weekly."));
     expect(out).toContain("Vault-specific guidance from the owner");
     expect(out).toContain("Weekly notes live in Journal/Weekly.");
+  });
+  test("folds in the vault's AGENTS.md", () => {
+    const out = buildInstructions(ctx(null, "# Vault Guide\nUse the Dataview plugin for indexes."));
+    expect(out).toContain("Vault guide (AGENTS.md)");
+    expect(out).toContain("Use the Dataview plugin for indexes.");
+  });
+  test("includes both AGENTS.md and owner guidance", () => {
+    const out = buildInstructions(ctx("Owner says hi.", "Vault guide says hi."));
+    expect(out).toContain("Vault guide says hi.");
+    expect(out).toContain("Owner says hi.");
   });
 });
 
