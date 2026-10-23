@@ -16,7 +16,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: obsidian-mcp:local
-    container_name: obsidian-mcp
     restart: unless-stopped
     stop_grace_period: 30s
     # environment:
