@@ -37,6 +37,7 @@ export class Snapshotter {
   private maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
   private intervalTimer: ReturnType<typeof setInterval> | null = null;
   private pendingReason: string | null = null;
+  private onMutation: ((reason: string) => void) | null = null;
 
   constructor(
     snapshotsDir: string,
@@ -84,8 +85,14 @@ export class Snapshotter {
     });
   }
 
+  /** Notified for every local mutation, before the debounced snapshot commit. */
+  setMutationListener(fn: ((reason: string) => void) | null): void {
+    this.onMutation = fn;
+  }
+
   /** Debounced commit after a mutation; maxWait bounds long edit sessions. */
   noteMutation(reason: string): void {
+    this.onMutation?.(reason);
     this.pendingReason = reason;
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => this.flushPending(), this.opts.debounceMs);

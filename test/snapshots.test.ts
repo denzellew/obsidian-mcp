@@ -49,6 +49,15 @@ describe("Snapshotter", () => {
     expect(commits[0]!.message).toBe("mcp: create_note b.md");
   });
 
+  test("noteMutation notifies the listener before the debounced commit", async () => {
+    const reasons: string[] = [];
+    snap.setMutationListener((reason) => reasons.push(reason));
+    vault.write("c.md", "1\n");
+    snap.noteMutation("edit c.md");
+    expect(reasons).toEqual(["edit c.md"]);
+    await snap.flush();
+  });
+
   test("debounced mutation commits once", async () => {
     vault.write("c.md", "1\n");
     snap.noteMutation("edit c.md");

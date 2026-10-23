@@ -83,6 +83,7 @@ const vaultCtx = createVaultContext({
 });
 
 const sync = new SyncSupervisor(config, db);
+snapshotter.setMutationListener(() => sync.noteLocalChange());
 sync.autostart();
 
 // --- HTTP ---------------------------------------------------------------------

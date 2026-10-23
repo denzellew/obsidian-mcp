@@ -70,7 +70,7 @@ describe("SyncSupervisor", () => {
     const bin = fakeOb(`echo "boom"\nexit 1`);
     const sup = new SyncSupervisor(makeConfig(bin), db);
     sup.start();
-    await new Promise((r) => setTimeout(r, 400));
+    await waitFor(() => sup.status().restartAttempts >= 1);
     const status = sup.status();
     expect(status.desired).toBe(true);
     expect(status.restartAttempts).toBeGreaterThanOrEqual(1);
@@ -102,5 +102,63 @@ describe("SyncSupervisor", () => {
     const status = sup.status();
     expect(["error"]).toContain(status.state);
     await sup.shutdown();
+  });
+
+  test("restarts when a local change is not uploaded after the scan settles", async () => {
+    const bin = fakeOb(`echo "Connection successful. Detecting changes..."\necho "Fully synced"\nsleep 60`);
+    const sup = new SyncSupervisor(makeConfig(bin), db, { uploadStallMs: 200, connectStallMs: 30_000 });
+    sup.start();
+    await waitFor(() => sup.recentLog().join("\n").includes("Fully synced"));
+    sup.noteLocalChange();
+    await waitFor(() => sup.recentLog().join("\n").includes("was not uploaded"), 2000);
+    expect(sup.recentLog().join("\n")).toContain("was not uploaded");
+    expect(sup.status().restartAttempts).toBeGreaterThanOrEqual(1);
+    await sup.shutdown();
+  });
+
+  test("an upload cancels the stall restart", async () => {
+    const signal = join(dir, "uploaded");
+    const bin = fakeOb(
+      `echo "Fully synced"\nwhile [ ! -f "${signal}" ]; do sleep 0.05; done\necho "Upload complete notes/a.md"\nsleep 60`,
+    );
+    const sup = new SyncSupervisor(makeConfig(bin), db, { uploadStallMs: 800, connectStallMs: 30_000 });
+    sup.start();
+    await waitFor(() => sup.recentLog().join("\n").includes("Fully synced"));
+    sup.noteLocalChange();
+    writeFileSync(signal, "1");
+    await waitFor(() => sup.recentLog().join("\n").includes("Upload complete"));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(sup.recentLog().join("\n")).not.toContain("was not uploaded");
+    expect(sup.status().state).toBe("running");
+    await sup.shutdown();
+  });
+
+  test("a local change during the startup scan does not restart", async () => {
+    const bin = fakeOb(`echo "Connection successful. Detecting changes..."\nsleep 60`);
+    const sup = new SyncSupervisor(makeConfig(bin), db, { uploadStallMs: 150, connectStallMs: 30_000 });
+    sup.start();
+    await waitFor(() => sup.recentLog().join("\n").includes("Connection successful"));
+    sup.noteLocalChange();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(sup.recentLog().join("\n")).not.toContain("was not uploaded");
+    expect(sup.status().state).toBe("running");
+    await sup.shutdown();
+  });
+
+  test("restarts when ob stays on Connecting", async () => {
+    const bin = fakeOb(`echo "Connecting..."\nsleep 60`);
+    const sup = new SyncSupervisor(makeConfig(bin), db, { uploadStallMs: 30_000, connectStallMs: 200 });
+    sup.start();
+    await waitFor(() => sup.recentLog().join("\n").includes("stuck connecting"), 2000);
+    expect(sup.status().lastError).toContain("stuck connecting");
+    expect(sup.status().restartAttempts).toBeGreaterThanOrEqual(1);
+    await sup.shutdown();
+  });
+
+  test("ignores local changes while sync is stopped", () => {
+    const sup = new SyncSupervisor(makeConfig("/nonexistent/ob"), db, { uploadStallMs: 50 });
+    sup.noteLocalChange();
+    expect(sup.status().restartAttempts).toBe(0);
+    expect(sup.status().state).toBe("idle");
   });
 });
