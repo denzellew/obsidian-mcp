@@ -13,7 +13,7 @@
 services:
   app:
     build:
-      context: ..
+      context: .
       dockerfile: Dockerfile
     image: obsidian-mcp:local
     container_name: obsidian-mcp
