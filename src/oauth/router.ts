@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
 import type { AuthEnv } from "../auth/middleware.ts";
-import { abortRegistry, hashToken, mintToken } from "../auth/tokens.ts";
+import { abortRegistry, hashToken, mintToken, safeEqual } from "../auth/tokens.ts";
 import { isRegistrableRedirectUri, pkceChallengeFromVerifier, redirectUriMatches } from "./policy.ts";
 import { ConsentPage, OAuthErrorPage } from "../web/routes/consent.tsx";
 import { recordAdmin } from "../audit.ts";
@@ -23,10 +23,43 @@ export interface ClientRow {
   logo_uri: string | null;
   created_at: number;
   consented_at: number | null;
+  /** SHA-256 hex. Null for public DCR clients. */
+  client_secret_hash: string | null;
 }
 
 function getClient(db: Database, clientId: string): ClientRow | null {
   return db.query<ClientRow, [string]>("SELECT * FROM oauth_clients WHERE client_id = ?").get(clientId);
+}
+
+/** client_secret_post body fields, or client_secret_basic. A mismatch is an auth failure. */
+function readClientAuth(
+  authorization: string | undefined,
+  body: Record<string, string | File>,
+): { ok: true; clientId: string; secret: string } | { ok: false } {
+  const bodyId = typeof body.client_id === "string" ? body.client_id : "";
+  const bodySecret = typeof body.client_secret === "string" ? body.client_secret : "";
+  const basic = authorization?.match(/^Basic\s+(\S+)/i);
+  let basicId = "";
+  let basicSecret = "";
+  const basicToken = basic?.[1];
+  if (basicToken) {
+    const decoded = Buffer.from(basicToken, "base64").toString("utf8");
+    const idx = decoded.indexOf(":");
+    if (idx >= 0) {
+      basicId = decodeURIComponent(decoded.slice(0, idx));
+      basicSecret = decodeURIComponent(decoded.slice(idx + 1));
+    }
+  }
+  if (bodyId && basicId && bodyId !== basicId) return { ok: false };
+  return { ok: true, clientId: bodyId || basicId, secret: bodySecret || basicSecret };
+}
+
+function clientSecretOk(db: Database, clientId: string, secret: string): boolean {
+  const client = getClient(db, clientId);
+  if (!client) return false;
+  if (!client.client_secret_hash) return true;
+  if (!secret) return false;
+  return safeEqual(hashToken(secret), client.client_secret_hash);
 }
 
 function canonicalResource(origin: string): string {
@@ -54,7 +87,7 @@ export function wellKnownRouter(): Hono<AuthEnv> {
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["none"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
     scopes_supported: ["mcp"],
   });
   const cache = (c: { header: (k: string, v: string) => void }) => c.header("Cache-Control", "public, max-age=3600");
@@ -135,12 +168,14 @@ export function oauthPublicRouter(db: Database): Hono {
     const grantType = String(body.grant_type ?? "");
 
     if (grantType === "authorization_code") {
+      const auth = readClientAuth(c.req.header("authorization"), body);
+      if (!auth.ok) return c.json({ error: "invalid_client", error_description: "client_id mismatch" }, 401);
       const code = String(body.code ?? "");
       const verifier = String(body.code_verifier ?? "");
-      const clientId = String(body.client_id ?? "");
+      const clientId = auth.clientId;
       const redirectUri = String(body.redirect_uri ?? "");
-      if (!code || !verifier || !clientId) {
-        return c.json({ error: "invalid_request", error_description: "code, code_verifier and client_id are required" }, 400);
+      if (!code || !clientId) {
+        return c.json({ error: "invalid_request", error_description: "code and client_id are required" }, 400);
       }
       const row = db
         .query<
@@ -160,7 +195,10 @@ export function oauthPublicRouter(db: Database): Hono {
       }
       if (row.client_id !== clientId) return c.json({ error: "invalid_grant", error_description: "client_id mismatch" }, 400);
       if (row.redirect_uri !== redirectUri) return c.json({ error: "invalid_grant", error_description: "redirect_uri mismatch" }, 400);
-      if (pkceChallengeFromVerifier(verifier) !== row.code_challenge) {
+      if (!clientSecretOk(db, clientId, auth.secret)) {
+        return c.json({ error: "invalid_client", error_description: "Client authentication failed" }, 401);
+      }
+      if (row.code_challenge && (!verifier || pkceChallengeFromVerifier(verifier) !== row.code_challenge)) {
         return c.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
       }
       db.query("UPDATE oauth_authorization_codes SET used_at = unixepoch() WHERE code_hash = ?").run(row.code_hash);
@@ -183,12 +221,14 @@ export function oauthPublicRouter(db: Database): Hono {
     if (grantType === "refresh_token") {
       const presented = String(body.refresh_token ?? "");
       if (!presented) return c.json({ error: "invalid_request", error_description: "refresh_token is required" }, 400);
+      const auth = readClientAuth(c.req.header("authorization"), body);
+      if (!auth.ok) return c.json({ error: "invalid_client", error_description: "client_id mismatch" }, 401);
       const h = hashToken(presented);
       const now = Math.floor(Date.now() / 1000);
 
       let grant = db
-        .query<{ id: string; refresh_expires_at: number; revoked_at: number | null }, [string]>(
-          "SELECT id, refresh_expires_at, revoked_at FROM oauth_grants WHERE refresh_token_hash = ?",
+        .query<{ id: string; client_id: string; refresh_expires_at: number; revoked_at: number | null }, [string]>(
+          "SELECT id, client_id, refresh_expires_at, revoked_at FROM oauth_grants WHERE refresh_token_hash = ?",
         )
         .get(h);
 
@@ -200,7 +240,10 @@ export function oauthPublicRouter(db: Database): Hono {
           )
           .get(h);
         if (prev && !prev.revoked_at && prev.prev_rotated_at && now - prev.prev_rotated_at <= REFRESH_REUSE_GRACE_S) {
-          grant = { id: prev.id, refresh_expires_at: now + 1, revoked_at: null };
+          const owner = db
+            .query<{ client_id: string }, [string]>("SELECT client_id FROM oauth_grants WHERE id = ?")
+            .get(prev.id);
+          grant = { id: prev.id, client_id: owner?.client_id ?? "", refresh_expires_at: now + 1, revoked_at: null };
         } else if (prev) {
           // reuse outside the grace window → token theft signal → kill the grant
           db.query("UPDATE oauth_grants SET revoked_at = unixepoch() WHERE id = ?").run(prev.id);
@@ -212,6 +255,12 @@ export function oauthPublicRouter(db: Database): Hono {
       }
       if (grant.revoked_at) return c.json({ error: "invalid_grant", error_description: "Grant revoked" }, 400);
       if (grant.refresh_expires_at < now) return c.json({ error: "invalid_grant", error_description: "Refresh token expired; re-authorize" }, 400);
+      if (auth.clientId && auth.clientId !== grant.client_id) {
+        return c.json({ error: "invalid_grant", error_description: "client_id mismatch" }, 400);
+      }
+      if (!clientSecretOk(db, grant.client_id, auth.secret)) {
+        return c.json({ error: "invalid_client", error_description: "Client authentication failed" }, 401);
+      }
 
       const access = mintToken("access");
       const refresh = mintToken("refresh");
@@ -292,8 +341,12 @@ function validateAuthorizeRequest(
   };
 
   if (q.response_type !== "code") return err("unsupported_response_type", "Only response_type=code is supported");
-  if (!q.code_challenge) return err("invalid_request", "PKCE code_challenge is required");
-  if ((q.code_challenge_method ?? "") !== "S256") return err("invalid_request", "code_challenge_method must be S256");
+  if (!client.client_secret_hash) {
+    if (!q.code_challenge) return err("invalid_request", "PKCE code_challenge is required");
+    if ((q.code_challenge_method ?? "") !== "S256") return err("invalid_request", "code_challenge_method must be S256");
+  } else if (q.code_challenge && (q.code_challenge_method ?? "") !== "S256") {
+    return err("invalid_request", "code_challenge_method must be S256");
+  }
   if (q.resource && q.resource !== canonicalResource(origin)) {
     return err("invalid_target", `resource must be ${canonicalResource(origin)}`);
   }
@@ -304,7 +357,7 @@ function validateAuthorizeRequest(
       client_id: clientId,
       redirect_uri: redirectUri,
       state: q.state,
-      code_challenge: q.code_challenge,
+      code_challenge: q.code_challenge ?? "",
       resource: q.resource,
     },
   };
@@ -368,6 +421,20 @@ export function oauthInteractiveRouter(db: Database): Hono<AuthEnv> {
 
 export interface ConnectionRow extends ClientRow {
   grants: { id: string; created_at: number; last_used_at: number | null; access_expires_at: number }[];
+}
+
+export function createConfidentialClient(
+  db: Database,
+  name: string,
+  redirectUri: string,
+): { clientId: string; secret: string } {
+  const clientId = `obcl_${randomBytes(15).toString("base64url")}`;
+  const secret = `obcs_${randomBytes(32).toString("base64url")}`;
+  db.query(
+    "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, client_secret_hash, consented_at) VALUES (?, ?, ?, ?, unixepoch())",
+  ).run(clientId, name, JSON.stringify([redirectUri]), hashToken(secret));
+  log.info(`created confidential OAuth client '${name}' (${clientId})`);
+  return { clientId, secret };
 }
 
 export function listConnections(db: Database): ConnectionRow[] {
