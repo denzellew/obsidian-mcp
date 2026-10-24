@@ -24,25 +24,25 @@ data/
 
 Set `MCP_PROFILE=personal-context` only for a separate Personal Context deployment. It exposes a narrow five-tool API (`get_personal_profile`, `search_personal_context`, `get_personal_context`, `propose_personal_update`, and `approve_personal_update`) instead of the generic vault filesystem tools.
 
-Both services run from [`deploy/docker-compose.yml`](deploy/docker-compose.yml), with Personal Context state in `deploy/data/personal` and the Knowledge Vault in `deploy/data/knowledge`. Never share those directories, hostnames, tokens, passkeys, snapshots, or Obsidian Sync vaults.
+Both services run from [`deploy/docker-compose.cloudflared.yml`](deploy/docker-compose.cloudflared.yml) and share one `obsidian-mcp:local` image. Personal Context state is in `deploy/data/personal` and the Knowledge Vault is in `deploy/data/knowledge`. Never share those directories, hostnames, tokens, passkeys, snapshots, or Obsidian Sync vaults.
 
 Personal notes require `category`, `sensitivity` (`general`, `private`, or `restricted`), `confidence`, `status`, and `updated` frontmatter. Authenticated clients default to read/propose access for `general` context only. To grant further access or owner approval, insert a row into `personal_client_policies` keyed by the static token or OAuth grant principal ID; all requested sensitivity, category, and action values must be explicitly listed.
 
 ## Quick start
 
-The server must be reachable over HTTPS (passkeys and Claude connectors require it). [`deploy/docker-compose.yml`](deploy/docker-compose.yml) runs both services behind one Cloudflare Tunnel. Configure one public hostname for `http://app:3000` and another for `http://personal-context:3000`.
+The server must be reachable over HTTPS (passkeys and Claude connectors require it). [`deploy/docker-compose.cloudflared.yml`](deploy/docker-compose.cloudflared.yml) runs both services behind one Cloudflare Tunnel. Configure one public hostname for `http://knowledge-vault:3000` and another for `http://personal-context:3000`.
 
 ```sh
 # create .env with CLOUDFLARED_TUNNEL_TOKEN
-docker compose -f deploy/docker-compose.yml up -d --build
-docker compose -f deploy/docker-compose.yml logs app personal-context
+docker compose -f deploy/docker-compose.cloudflared.yml up -d --build
+docker compose -f deploy/docker-compose.cloudflared.yml logs knowledge-vault personal-context
 ```
 
 **Just want to try it locally** (no tunnel, no published image)? From a checkout:
 
 ```sh
 docker compose -f deploy/docker-compose.local.yml up --build
-docker compose -f deploy/docker-compose.local.yml logs app personal-context
+docker compose -f deploy/docker-compose.local.yml logs knowledge-vault personal-context
 # Knowledge Vault:  http://localhost:3000/setup
 # Personal Context: http://localhost:3001/setup
 ```

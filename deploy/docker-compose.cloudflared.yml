@@ -1,34 +1,33 @@
 # Knowledge Vault and Personal Context behind one Cloudflare Tunnel.
 #
 # In the Cloudflare tunnel, route each public hostname to its service:
-#   notes.example.com    -> http://app:3000
+#   notes.example.com    -> http://knowledge-vault:3000
 #   personal.example.com -> http://personal-context:3000
 #
 # From the repo root:
-#   docker compose -f deploy/docker-compose.yml up -d --build
-#   docker compose -f deploy/docker-compose.yml logs app personal-context
+#   docker compose -f deploy/docker-compose.cloudflared.yml up -d --build
+#   docker compose -f deploy/docker-compose.cloudflared.yml logs knowledge-vault personal-context
 #
 # PUBLIC_URL stays unset so each service derives its origin from the hostname
 # Cloudflare forwarded. The two data directories must never be shared.
+# Both services run the same image; MCP_PROFILE selects the personal API.
+
+x-mcp: &mcp
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  image: obsidian-mcp:local
+  restart: unless-stopped
+  stop_grace_period: 30s
 
 services:
   knowledge-vault:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: obsidian-mcp:local
-    restart: unless-stopped
-    stop_grace_period: 30s
+    <<: *mcp
     volumes:
       - ./data/knowledge:/data
 
   personal-context:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: personal-context-mcp:local
-    restart: unless-stopped
-    stop_grace_period: 30s
+    <<: *mcp
     environment:
       MCP_PROFILE: personal-context
     volumes:

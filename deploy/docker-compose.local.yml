@@ -2,34 +2,33 @@
 #
 # From the repo root:
 #   docker compose -f deploy/docker-compose.local.yml up --build
-#   docker compose -f deploy/docker-compose.local.yml logs app personal-context
+#   docker compose -f deploy/docker-compose.local.yml logs knowledge-vault personal-context
 #
 # Knowledge Vault:      http://localhost:3000/setup
 # Personal Context:     http://localhost:3001/setup
 #
 # Passkeys work on http://localhost. With no PUBLIC_URL set, each service
 # derives its origin from the request host. Data persists under deploy/data.
+# Both services run the same image; MCP_PROFILE selects the personal API.
+
+x-mcp: &mcp
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  image: obsidian-mcp:local
+  restart: unless-stopped
+  stop_grace_period: 30s
 
 services:
   knowledge-vault:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: obsidian-mcp:local
-    restart: unless-stopped
-    stop_grace_period: 30s
+    <<: *mcp
     ports:
       - "3000:3000"
     volumes:
       - ./data/knowledge:/data
 
   personal-context:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: personal-context-mcp:local
-    restart: unless-stopped
-    stop_grace_period: 30s
+    <<: *mcp
     environment:
       MCP_PROFILE: personal-context
     ports:
