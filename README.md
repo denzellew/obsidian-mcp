@@ -20,27 +20,31 @@ data/
 └── snapshots/vault.git  bare git repo with vault history
 ```
 
+## Personal Context profile
+
+Set `MCP_PROFILE=personal-context` only for a separate Personal Context deployment. It exposes a narrow five-tool API (`get_personal_profile`, `search_personal_context`, `get_personal_context`, `propose_personal_update`, and `approve_personal_update`) instead of the generic vault filesystem tools.
+
+Both services run from [`deploy/docker-compose.yml`](deploy/docker-compose.yml), with Personal Context state in `deploy/data/personal` and the Knowledge Vault in `deploy/data/knowledge`. Never share those directories, hostnames, tokens, passkeys, snapshots, or Obsidian Sync vaults.
+
+Personal notes require `category`, `sensitivity` (`general`, `private`, or `restricted`), `confidence`, `status`, and `updated` frontmatter. Authenticated clients default to read/propose access for `general` context only. To grant further access or owner approval, insert a row into `personal_client_policies` keyed by the static token or OAuth grant principal ID; all requested sensitivity, category, and action values must be explicitly listed.
+
 ## Quick start
 
-The server must be reachable over HTTPS (passkeys and Claude connectors require it). The recommended setup is a tunnel — no ports exposed at home:
-
-- [`deploy/docker-compose.gatecrash.yml`](deploy/docker-compose.gatecrash.yml) — self-hosted [Gatecrash](https://github.com/jclement/gatecrash) tunnel
-- [`deploy/docker-compose.cloudflared.yml`](deploy/docker-compose.cloudflared.yml) — Cloudflare Tunnel
+The server must be reachable over HTTPS (passkeys and Claude connectors require it). [`deploy/docker-compose.yml`](deploy/docker-compose.yml) runs both services behind one Cloudflare Tunnel. Configure one public hostname for `http://app:3000` and another for `http://personal-context:3000`.
 
 ```sh
-mkdir obsidian-mcp && cd obsidian-mcp
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/jclement/obsidian-mcp/main/deploy/docker-compose.gatecrash.yml
-# create .env with tunnel credentials (see comments in the compose file)
-docker compose up -d
-docker compose logs app        # ← copy the FIRST-RUN SETUP token
+# create .env with CLOUDFLARED_TUNNEL_TOKEN
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml logs app personal-context
 ```
 
 **Just want to try it locally** (no tunnel, no published image)? From a checkout:
 
 ```sh
 docker compose -f deploy/docker-compose.local.yml up --build
-docker compose -f deploy/docker-compose.local.yml logs app   # ← setup token
-# open http://localhost:3000/setup
+docker compose -f deploy/docker-compose.local.yml logs app personal-context
+# Knowledge Vault:  http://localhost:3000/setup
+# Personal Context: http://localhost:3001/setup
 ```
 
 Open `https://your-host/setup`, paste the token, and register a passkey. That passkey is now the only way into the management UI; add more from the Passkeys page.
@@ -88,6 +92,7 @@ Design notes:
 | Env var | Default | Purpose |
 |---|---|---|
 | `PUBLIC_URL` | — (optional) | Pin the external URL. **Leave unset** to auto-derive it from your reverse proxy's `X-Forwarded-Proto`/`X-Forwarded-Host` per request (the common case behind a single tunnel). Set it only when you want to hard-pin the origin or run behind multiple/untrusted proxies. |
+| `MCP_PROFILE` | `vault` | `vault` exposes generic Obsidian tools; `personal-context` exposes the restricted personal-context API. Use the latter only with a separate data mount and hostname. |
 | `PORT` | `3000` | Listen port |
 | `DATA_DIR` | `/data` | Root for all persistent state |
 | `VAULT_DIR` | `$DATA_DIR/Vault` | Vault location |
