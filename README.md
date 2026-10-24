@@ -100,7 +100,7 @@ Design notes:
 | `OB_KILL_GRACE_MS` | `5000` | SIGTERM→SIGKILL grace for ob ([it ignores SIGTERM](https://github.com/obsidianmd/obsidian-headless/issues/25)) |
 | `SNAPSHOT_DEBOUNCE_MS` | `30000` | Snapshot debounce after mutations |
 | `SNAPSHOT_INTERVAL_MS` | `3600000` | Periodic dirty-check snapshot |
-| `AUTH_RESET` | — | Set to `1` to wipe passkeys/sessions and re-enter setup (e.g. after a hostname change) |
+| `AUTH_RESET` | — | Set to `1` to wipe passkeys, sessions, and the pinned hostname, then re-enter setup. Unset it after restarting. |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 
 ## Security model

@@ -3,12 +3,12 @@ import { mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { getSetting, openDatabase } from "./db/index.ts";
+import { passkeyCount, resetAuth } from "./auth/webauthn.ts";
 import { createApp } from "./app.tsx";
 import { VaultStore } from "./vault/store.ts";
 import { LinkIndex } from "./vault/links.ts";
 import { Snapshotter } from "./snapshots/snapshotter.ts";
 import { createVaultContext } from "./mcp/context.ts";
-import { passkeyCount } from "./auth/webauthn.ts";
 import { sweepExpired } from "./auth/sessions.ts";
 import { pruneAudit } from "./audit.ts";
 import { SyncSupervisor } from "./sync/supervisor.ts";
@@ -28,8 +28,8 @@ const db = openDatabase(config.dbPath);
 // --- auth bootstrap ---------------------------------------------------------
 
 if (config.authReset) {
-  db.exec("DELETE FROM passkey_credentials; DELETE FROM ui_sessions;");
-  log.warn("AUTH_RESET=1: all passkeys and sessions wiped — setup mode re-entered. Unset AUTH_RESET and restart after re-registering.");
+  resetAuth(db);
+  log.warn("AUTH_RESET=1: passkeys, sessions, and pinned hostname wiped — setup mode re-entered. Unset AUTH_RESET and restart after re-registering.");
 }
 
 // In fixed mode, warn loudly if the configured host no longer matches the

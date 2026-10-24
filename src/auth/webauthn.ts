@@ -8,7 +8,7 @@ import {
   type AuthenticationResponseJSON,
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
-import { getSetting, setSetting } from "../db/index.ts";
+import { deleteSetting, getSetting, setSetting } from "../db/index.ts";
 
 const CHALLENGE_TTL_S = 300;
 
@@ -74,6 +74,12 @@ export function passkeyCount(db: Database): number {
 /** The rpID this server is pinned to (set at first passkey registration). */
 export function pinnedRpId(db: Database): string | null {
   return getSetting(db, "rp_id_at_setup");
+}
+
+/** Wipe login state so setup can pin a new hostname. Leaves API tokens and other settings. */
+export function resetAuth(db: Database): void {
+  db.exec("DELETE FROM passkey_credentials; DELETE FROM ui_sessions;");
+  deleteSetting(db, "rp_id_at_setup");
 }
 
 /** Reject auth under a different host than the one set up with. */
