@@ -16,6 +16,7 @@ function bool(name: string, def: boolean): boolean {
 
 export interface Config {
   port: number;
+  mcpProfile: "vault" | "personal-context";
   /**
    * Configured public URL (PUBLIC_URL). When null, the public origin is
    * derived from the reverse proxy's forwarded headers per request and the
@@ -47,6 +48,10 @@ export interface Config {
 export function loadConfig(env = process.env): Config {
   const production = env.NODE_ENV === "production";
   const port = int("PORT", 3000);
+  const mcpProfile = env.MCP_PROFILE ?? "vault";
+  if (mcpProfile !== "vault" && mcpProfile !== "personal-context") {
+    throw new Error("MCP_PROFILE must be 'vault' or 'personal-context'");
+  }
 
   // PUBLIC_URL is optional. When set it pins the origin/rpID (most explicit,
   // best for multi-proxy setups). When unset, we derive the public origin from
@@ -73,6 +78,7 @@ export function loadConfig(env = process.env): Config {
   const dataDir = env.DATA_DIR ?? "./data";
   return {
     port,
+    mcpProfile,
     publicUrl,
     derived,
     // In derived mode these are only fallbacks for non-request contexts (logging);

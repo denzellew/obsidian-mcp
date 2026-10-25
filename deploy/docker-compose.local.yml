@@ -1,24 +1,37 @@
-# Try Obsidian MCP locally — builds the image from source, no published image,
-# no tunnel. Port 3000 is published so you reach it directly at localhost.
+# Both MCP services locally — builds from source, no tunnel.
 #
 # From the repo root:
 #   docker compose -f deploy/docker-compose.local.yml up --build
-#   docker compose -f deploy/docker-compose.local.yml logs app   ← setup token
-# then open http://localhost:3000/setup.
+#   docker compose -f deploy/docker-compose.local.yml logs knowledge-vault personal-context
 #
-# Passkeys work on http://localhost (browser secure-context exception). With no
-# PUBLIC_URL set, the app derives its origin from the request (→ localhost:3000).
-# Data persists in deploy/data (gitignored).
+# Knowledge Vault:      http://localhost:3000/setup
+# Personal Context:     http://localhost:3001/setup
+#
+# Passkeys work on http://localhost. With no PUBLIC_URL set, each service
+# derives its origin from the request host. Data persists under deploy/data.
+# Both services run the same image; MCP_PROFILE selects the personal API.
+
+x-mcp: &mcp
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  image: obsidian-mcp:local
+  restart: unless-stopped
+  stop_grace_period: 30s
 
 services:
-  app:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: obsidian-mcp:local
-    restart: unless-stopped
-    stop_grace_period: 30s
+  knowledge-vault:
+    <<: *mcp
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/data
+      - ./data/knowledge:/data
+
+  personal-context:
+    <<: *mcp
+    environment:
+      MCP_PROFILE: personal-context
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./data/personal:/data

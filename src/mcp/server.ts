@@ -14,6 +14,8 @@ import { registerDailyNote } from "./tools/daily-note.ts";
 import { registerResources } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { AuthPrincipal } from "../auth/tokens.ts";
+import type { Database } from "bun:sqlite";
 
 export const SERVER_INSTRUCTIONS = `Obsidian vault server. The vault may be edited concurrently by the user's other devices (Obsidian Sync), so:
 - ALWAYS read_note before editing and pass its hash as expected_hash; on STALE_NOTE errors, re-read and retry.
@@ -25,6 +27,8 @@ export const SERVER_INSTRUCTIONS = `Obsidian vault server. The vault may be edit
 export interface McpServerOptions {
   /** Called after each tool invocation for audit logging. */
   onToolCall?: (tool: string, args: Record<string, unknown>, result: CallToolResult) => void;
+  principal?: AuthPrincipal;
+  db?: Database;
 }
 
 /**

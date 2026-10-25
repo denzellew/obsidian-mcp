@@ -11,7 +11,8 @@ import { LinkIndex } from "../src/vault/links.ts";
 import { Snapshotter } from "../src/snapshots/snapshotter.ts";
 import { createVaultContext } from "../src/mcp/context.ts";
 import { resolveOrigin } from "../src/web/origin.ts";
-import { setSetting } from "../src/db/index.ts";
+import { getSetting, setSetting } from "../src/db/index.ts";
+import { resetAuth } from "../src/auth/webauthn.ts";
 import { resetRateLimits } from "../src/auth/middleware.ts";
 import { tmpVault, type TmpVault } from "./helpers.ts";
 import type { Database } from "bun:sqlite";
@@ -147,5 +148,17 @@ describe("derived mode end-to-end (behind a proxy)", () => {
     // the legitimate proxy host still works
     const ok = await proxied("/login/webauthn/options", { method: "POST" });
     expect(ok.status).toBe(200);
+  });
+
+  test("AUTH_RESET clears the pinned hostname", async () => {
+    setSetting(db, "rp_id_at_setup", PROXY);
+    resetAuth(db);
+    expect(getSetting(db, "rp_id_at_setup")).toBeNull();
+
+    const res = await fetch(`${base}/login/webauthn/options`, {
+      method: "POST",
+      headers: { "x-forwarded-proto": "https", "x-forwarded-host": "attacker.example.com" },
+    });
+    expect(res.status).not.toBe(421);
   });
 });

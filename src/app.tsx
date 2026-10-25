@@ -6,6 +6,7 @@ import { StreamableHTTPTransport } from "@hono/mcp";
 import type { Config } from "./config.ts";
 import type { VaultContext } from "./mcp/context.ts";
 import { createMcpServer } from "./mcp/server.ts";
+import { createPersonalContextMcpServer } from "./personal/mcp.ts";
 import {
   hostGuard,
   mcpOriginGuard,
@@ -88,7 +89,10 @@ export function createApp(deps: AppDeps) {
   app.all("/mcp", async (c) => {
     const transport = new StreamableHTTPTransport();
     const principal = c.var.principal!;
-    const server = createMcpServer(deps.vaultCtx, {
+    const serverFactory = config.mcpProfile === "personal-context" ? createPersonalContextMcpServer : createMcpServer;
+    const server = serverFactory(deps.vaultCtx, {
+      principal,
+      db,
       onToolCall: (tool, args, result) =>
         recordMcpCall(
           db,

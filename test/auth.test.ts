@@ -204,7 +204,7 @@ describe("metadata endpoints", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.code_challenge_methods_supported).toEqual(["S256"]);
     expect(body.registration_endpoint).toContain("/oauth/register");
-    expect(body.token_endpoint_auth_methods_supported).toEqual(["none"]);
+    expect(body.token_endpoint_auth_methods_supported).toEqual(["none", "client_secret_basic", "client_secret_post"]);
   });
 });
 
@@ -363,6 +363,73 @@ describe("OAuth flow", () => {
       body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: tokens.refresh_token }),
     });
     expect(reuse.status).toBe(400);
+  });
+
+  test("confidential client exchanges a code with client_secret_post and no PKCE", async () => {
+    const redirectUri = "https://oauth-callbacks.cloudflareaccess.com/cdn-cgi/access/outbound-oauth-callback";
+    const created = await fetch(`${base}/app/connections`, {
+      method: "POST",
+      headers: {
+        Cookie: sessionCookieHeader(),
+        "Content-Type": "application/x-www-form-urlencoded",
+        Origin: "http://localhost:3000",
+      },
+      body: new URLSearchParams({ name: "Cloudflare", redirect_uri: redirectUri }),
+    });
+    expect(created.status).toBe(200);
+    const html = await created.text();
+    const clientId = html.match(/obcl_[A-Za-z0-9_-]+/)?.[0];
+    const secret = html.match(/obcs_[A-Za-z0-9_-]+/)?.[0];
+    expect(clientId).toBeTruthy();
+    expect(secret).toBeTruthy();
+
+    const authorize = await fetch(
+      `${base}/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=cf`,
+      { headers: { Cookie: sessionCookieHeader() }, redirect: "manual" },
+    );
+    expect(authorize.status).toBe(302);
+    const code = new URL(authorize.headers.get("location")!).searchParams.get("code")!;
+    expect(code).toStartWith("obac_");
+
+    const denied = await fetch(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: clientId!,
+        client_secret: "wrong",
+        redirect_uri: redirectUri,
+      }),
+    });
+    expect(denied.status).toBe(401);
+
+    const tokenRes = await fetch(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: clientId!,
+        client_secret: secret!,
+        redirect_uri: redirectUri,
+      }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokens = (await tokenRes.json()) as { access_token: string; refresh_token: string };
+    expect(await mcpPing(tokens.access_token)).toBe(200);
+
+    const refreshed = await fetch(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: tokens.refresh_token,
+        client_id: clientId!,
+        client_secret: secret!,
+      }),
+    });
+    expect(refreshed.status).toBe(200);
   });
 
   test("revocation endpoint kills the grant", async () => {
