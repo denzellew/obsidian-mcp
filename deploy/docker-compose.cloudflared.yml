@@ -1,31 +1,33 @@
-# Obsidian MCP exposed through a Cloudflare Tunnel.
-#
-# 1. In Cloudflare Zero Trust, create a tunnel and point its public hostname
-#    (e.g. notes.example.com) at http://app:3000.
-# 2. Copy this file to docker-compose.yml and create a .env next to it:
-#      CLOUDFLARED_TUNNEL_TOKEN=eyJ...
-# 3. docker compose up -d
-# 4. docker compose logs app   ← grab the setup token, open https://<your-host>/setup
-#
-# PUBLIC_URL is optional: the app derives its public origin from cloudflared's
-# forwarded headers. Set it only to hard-pin the hostname.
+
+# PUBLIC_URL stays unset so each service derives its origin from the hostname
+# Cloudflare forwarded. The two data directories must never be shared.
+# Both services run the same image; MCP_PROFILE selects the personal API.
+
+x-mcp: &mcp
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  image: obsidian-mcp:local
+  restart: unless-stopped
+  stop_grace_period: 30s
 
 services:
-  app:
-    image: ghcr.io/jclement/obsidian-mcp:latest
-    # To build from a local checkout instead of pulling the published image,
-    # uncomment this and run `docker compose up --build`:
-    # build: { context: .., dockerfile: Dockerfile }
-    restart: unless-stopped
-    stop_grace_period: 30s
-    # environment:
-    #   PUBLIC_URL: https://notes.example.com   # optional override
+  knowledge-vault:
+    <<: *mcp
     volumes:
-      - ./data:/data
+      - ./data/knowledge:/data
+
+  personal-context:
+    <<: *mcp
+    environment:
+      MCP_PROFILE: personal-context
+    volumes:
+      - ./data/personal:/data
 
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     depends_on:
-      - app
+      - knowledge-vault
+      - personal-context
     command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
