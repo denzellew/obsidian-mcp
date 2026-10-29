@@ -13,7 +13,7 @@ import { LinkIndex } from "../src/vault/links.ts";
 import { Snapshotter } from "../src/snapshots/snapshotter.ts";
 import { createVaultContext } from "../src/mcp/context.ts";
 import { createApiToken } from "../src/auth/tokens.ts";
-import { fixtureVault, type TmpVault } from "./helpers.ts";
+import { fixtureVault, type TmpVault, singleVault } from "./helpers.ts";
 
 let vault: TmpVault;
 let snapsDir: string;
@@ -46,7 +46,7 @@ beforeAll(async () => {
     now: () => new Date(2026, 5, 12, 14, 30), // fixed: 2026-06-12
   });
   const config = loadConfig({ DATA_DIR: vault.dir, PUBLIC_URL: "http://localhost:3000" } as unknown as NodeJS.ProcessEnv);
-  const app = createApp({ config, db, vaultCtx, setupState: { token: null, pendingUserHandle: null } });
+  const app = createApp({ config, db, vaults: singleVault(config, db, vaultCtx), setupState: { token: null, pendingUserHandle: null } });
   server = Bun.serve({ port: 0, fetch: app.fetch });
 
   const { token } = createApiToken(db, "integration-test");

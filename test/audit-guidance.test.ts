@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createApp } from "../src/app.tsx";
 import { loadConfig } from "../src/config.ts";
-import { openDatabase, setSetting } from "../src/db/index.ts";
+import { openDatabase, vaultSettings } from "../src/db/index.ts";
 import { VaultStore } from "../src/vault/store.ts";
 import { LinkIndex } from "../src/vault/links.ts";
 import { Snapshotter } from "../src/snapshots/snapshotter.ts";
@@ -15,7 +15,7 @@ import { createVaultContext } from "../src/mcp/context.ts";
 import { buildInstructions } from "../src/mcp/server.ts";
 import { categorize, summarize, listAudit, recordAdmin } from "../src/audit.ts";
 import { createApiToken } from "../src/auth/tokens.ts";
-import { fixtureVault, type TmpVault } from "./helpers.ts";
+import { fixtureVault, type TmpVault, singleVault } from "./helpers.ts";
 import type { Database } from "bun:sqlite";
 
 describe("audit categorize/summarize", () => {
@@ -88,7 +88,8 @@ describe("audit + guidance end-to-end", () => {
     vault = fixtureVault();
     snapsDir = mkdtempSync(join(tmpdir(), "obmcp-snaps-"));
     db = openDatabase(":memory:");
-    setSetting(db, "vault_instructions", "I use the Tasks plugin; open tasks are '- [ ]' lines.");
+    const settings = vaultSettings(db, 1);
+    settings.set("vault_instructions", "I use the Tasks plugin; open tasks are '- [ ]' lines.");
     const store = new VaultStore(vault.dir);
     const snapshotter = new Snapshotter(snapsDir, vault.dir, { debounceMs: 50, maxWaitMs: 500, intervalMs: 600_000 });
     await snapshotter.init();
@@ -97,10 +98,10 @@ describe("audit + guidance end-to-end", () => {
       links: new LinkIndex(store),
       snapshotter,
       now: () => new Date(2026, 5, 12, 14, 30),
-      ownerGuidance: () => (require("../src/db/index.ts").getSetting(db, "vault_instructions") as string) ?? null,
+      ownerGuidance: () => settings.get("vault_instructions"),
     });
     const config = loadConfig({ DATA_DIR: vault.dir, PUBLIC_URL: "http://localhost:3000" } as unknown as NodeJS.ProcessEnv);
-    const app = createApp({ config, db, vaultCtx, setupState: { token: null, pendingUserHandle: null } });
+    const app = createApp({ config, db, vaults: singleVault(config, db, vaultCtx), setupState: { token: null, pendingUserHandle: null } });
     server = Bun.serve({ port: 0, fetch: app.fetch });
     const { token } = createApiToken(db, "Claude Code on laptop");
     client = new Client({ name: "test", version: "0.0.0" });

@@ -4,7 +4,7 @@ import type { Config } from "../../config.ts";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import type { SyncSupervisor } from "../../sync/supervisor.ts";
-import { getSetting, setSetting, deleteSetting } from "../../db/index.ts";
+import type { VaultSettings } from "../../db/index.ts";
 import { obInstalled, obListRemoteVaults, obLogin, obLogout, obSyncConfig, obSyncSetup, obSyncUnlink } from "../../sync/ob.ts";
 import { recordAdmin } from "../../audit.ts";
 
@@ -103,10 +103,10 @@ function WizardPickVault(props: { vaultListing: string; error?: string }) {
   );
 }
 
-export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): Hono<AuthEnv> {
+export function syncRouter(db: Database, config: Config, sync: SyncSupervisor, settings: VaultSettings): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
-  const isConfigured = () => getSetting(db, "sync_configured") === "1";
+  const isConfigured = () => settings.get("sync_configured") === "1";
 
   app.get("/", (c) => {
     const status = sync.status();
@@ -194,7 +194,7 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
         />,
       );
     }
-    setSetting(db, "sync_configured", "1");
+    settings.set("sync_configured", "1");
     recordAdmin(db, "sync.configure", { target: vault });
     // Enable config syncing (plugins, appearance, hotkeys) on the fresh link.
     // sync-config is a separate ob command; failure here is non-fatal — the
@@ -228,7 +228,7 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
     await sync.stop();
     await obSyncUnlink(config);
     await obLogout(config);
-    deleteSetting(db, "sync_configured");
+    settings.delete("sync_configured");
     recordAdmin(db, "sync.unlink");
     return c.redirect("/app/sync");
   });

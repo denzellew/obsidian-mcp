@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Database } from "bun:sqlite";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
-import { getSetting, setSetting, deleteSetting } from "../../db/index.ts";
+import type { VaultSettings } from "../../db/index.ts";
 import { recordAdmin } from "../../audit.ts";
 
 const MAX_LEN = 8000;
@@ -48,16 +48,16 @@ function GuidancePage(props: { value: string; saved?: boolean }) {
   );
 }
 
-export function guidanceRouter(db: Database): Hono<AuthEnv> {
+export function guidanceRouter(db: Database, settings: VaultSettings): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
-  app.get("/", (c) => c.html(<GuidancePage value={getSetting(db, "vault_instructions") ?? ""} />));
+  app.get("/", (c) => c.html(<GuidancePage value={settings.get("vault_instructions") ?? ""} />));
 
   app.post("/", async (c) => {
     const body = await c.req.parseBody();
     const value = String(body.guidance ?? "").trim().slice(0, MAX_LEN);
-    if (value) setSetting(db, "vault_instructions", value);
-    else deleteSetting(db, "vault_instructions");
+    if (value) settings.set("vault_instructions", value);
+    else settings.delete("vault_instructions");
     recordAdmin(db, "guidance.update", { detail: value ? `${value.length} chars` : "cleared" });
     return c.html(<span class="text-sm text-success">Saved — applies to new MCP sessions.</span>);
   });

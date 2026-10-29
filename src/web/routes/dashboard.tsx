@@ -24,7 +24,7 @@ export function dashboardRouter(deps: AppDeps) {
   const app = new Hono<AppEnv>();
 
   app.get("/", async (c) => {
-    const { vaultCtx, sync } = deps;
+    const { ctx: vaultCtx, sync } = deps.vaults.default();
     const publicOrigin = c.var.publicOrigin;
     let notes = 0;
     let attachments = 0;

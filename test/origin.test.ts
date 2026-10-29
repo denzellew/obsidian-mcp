@@ -13,7 +13,7 @@ import { createVaultContext } from "../src/mcp/context.ts";
 import { resolveOrigin } from "../src/web/origin.ts";
 import { setSetting } from "../src/db/index.ts";
 import { resetRateLimits } from "../src/auth/middleware.ts";
-import { tmpVault, type TmpVault } from "./helpers.ts";
+import { tmpVault, type TmpVault, singleVault } from "./helpers.ts";
 import type { Database } from "bun:sqlite";
 
 /** Minimal Context stub exposing just the header lookup resolveOrigin needs. */
@@ -79,7 +79,7 @@ describe("derived mode end-to-end (behind a proxy)", () => {
     await snapshotter.init();
     const vaultCtx = createVaultContext({ store, links: new LinkIndex(store), snapshotter });
     const config = loadConfig({ DATA_DIR: vault.dir } as unknown as NodeJS.ProcessEnv); // no PUBLIC_URL → derived
-    const app = createApp({ config, db, vaultCtx, setupState: { token: "setup_x", pendingUserHandle: null } });
+    const app = createApp({ config, db, vaults: singleVault(config, db, vaultCtx), setupState: { token: "setup_x", pendingUserHandle: null } });
     server = Bun.serve({ port: 0, fetch: app.fetch });
     base = `http://localhost:${server.port}`;
   });

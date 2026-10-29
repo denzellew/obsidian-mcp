@@ -1,17 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { getSetting, openDatabase } from "./db/index.ts";
 import { createApp } from "./app.tsx";
-import { VaultStore } from "./vault/store.ts";
-import { LinkIndex } from "./vault/links.ts";
-import { Snapshotter } from "./snapshots/snapshotter.ts";
-import { createVaultContext } from "./mcp/context.ts";
 import { passkeyCount } from "./auth/webauthn.ts";
 import { sweepExpired } from "./auth/sessions.ts";
 import { pruneAudit } from "./audit.ts";
-import { SyncSupervisor } from "./sync/supervisor.ts";
+import { VaultRegistry } from "./vaults/registry.ts";
 import type { SetupState } from "./web/routes/setup.tsx";
 import { logger } from "./log.ts";
 
@@ -19,7 +15,7 @@ const log = logger("server");
 
 const config = loadConfig();
 
-for (const dir of [config.dataDir, config.vaultDir, config.obConfigDir, config.snapshotsDir, join(config.dataDir, "db")]) {
+for (const dir of [config.dataDir, join(config.dataDir, "db")]) {
   mkdirSync(dir, { recursive: true });
 }
 
@@ -62,33 +58,13 @@ setInterval(() => {
 }, 3_600_000);
 sweepExpired(db);
 
-// --- vault, snapshots, sync --------------------------------------------------
+// --- vaults (snapshots, sync) ---------------------------------------------------
 
-const store = new VaultStore(config.vaultDir);
-const links = new LinkIndex(store);
-const snapshotter = new Snapshotter(config.snapshotsDir, config.vaultDir, {
-  debounceMs: config.snapshotDebounceMs,
-  maxWaitMs: config.snapshotMaxWaitMs,
-  intervalMs: config.snapshotIntervalMs,
-});
-await snapshotter.init();
-snapshotter.startTimers();
-
-const vaultCtx = createVaultContext({
-  store,
-  links,
-  snapshotter,
-  vaultName: basename(config.vaultDir),
-  ownerGuidance: () => getSetting(db, "vault_instructions"),
-});
-
-const sync = new SyncSupervisor(config, db);
-snapshotter.setMutationListener(() => sync.noteLocalChange());
-sync.autostart();
+const vaults = await VaultRegistry.boot(config, db);
 
 // --- HTTP ---------------------------------------------------------------------
 
-const app = createApp({ config, db, vaultCtx, setupState, sync });
+const app = createApp({ config, db, vaults, setupState });
 
 const server = Bun.serve({
   port: config.port,
@@ -106,8 +82,7 @@ async function shutdown(signal: string) {
   shuttingDown = true;
   log.info(`${signal} received, shutting down`);
   await server.stop();
-  await sync.shutdown(); // SIGTERM → grace → SIGKILL (ob ignores SIGTERM)
-  await snapshotter.shutdown(); // final commit if dirty
+  await vaults.shutdown(); // ob: SIGTERM → grace → SIGKILL, then final snapshot commits
   db.close();
   process.exit(0);
 }

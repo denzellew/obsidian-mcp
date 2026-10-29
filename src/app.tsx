@@ -4,7 +4,6 @@ import { serveStatic } from "hono/bun";
 import { csrf } from "hono/csrf";
 import { StreamableHTTPTransport } from "@hono/mcp";
 import type { Config } from "./config.ts";
-import type { VaultContext } from "./mcp/context.ts";
 import { createMcpServer } from "./mcp/server.ts";
 import {
   hostGuard,
@@ -29,14 +28,13 @@ import { snapshotsRouter } from "./web/routes/snapshots.tsx";
 import { auditRouter } from "./web/routes/audit.tsx";
 import { guidanceRouter } from "./web/routes/guidance.tsx";
 import { recordMcpCall } from "./audit.ts";
-import type { SyncSupervisor } from "./sync/supervisor.ts";
+import type { VaultRegistry } from "./vaults/registry.ts";
 
 export interface AppDeps {
   config: Config;
   db: Database;
-  vaultCtx: VaultContext;
+  vaults: VaultRegistry;
   setupState: SetupState;
-  sync?: SyncSupervisor;
 }
 
 export type AppEnv = AuthEnv & {
@@ -47,6 +45,7 @@ export type AppEnv = AuthEnv & {
 
 export function createApp(deps: AppDeps) {
   const { config, db } = deps;
+  const vault = deps.vaults.default();
   const app = new Hono<AppEnv>();
 
   app.use("*", async (c, next) => {
@@ -88,7 +87,7 @@ export function createApp(deps: AppDeps) {
   app.all("/mcp", async (c) => {
     const transport = new StreamableHTTPTransport();
     const principal = c.var.principal!;
-    const server = createMcpServer(deps.vaultCtx, {
+    const server = createMcpServer(vault.ctx, {
       onToolCall: (tool, args, result) =>
         recordMcpCall(
           db,
@@ -114,9 +113,9 @@ export function createApp(deps: AppDeps) {
   app.route("/app/passkeys", passkeysRouter(db, config));
   app.route("/app/connections", connectionsRouter(db));
   app.route("/app/audit", auditRouter(db));
-  app.route("/app/guidance", guidanceRouter(db));
-  if (deps.sync) app.route("/app/sync", syncRouter(db, config, deps.sync));
-  app.route("/app/snapshots", snapshotsRouter(deps.vaultCtx, db));
+  app.route("/app/guidance", guidanceRouter(db, vault.settings));
+  if (vault.sync) app.route("/app/sync", syncRouter(db, vault.config, vault.sync, vault.settings));
+  app.route("/app/snapshots", snapshotsRouter(vault.ctx, db));
   app.route("/app", dashboardRouter(deps));
 
   app.get("/", (c) => c.redirect("/app"));
