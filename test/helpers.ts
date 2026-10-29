@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 import type { Config } from "../src/config.ts";
 import { vaultSettings } from "../src/db/index.ts";
 import type { VaultContext } from "../src/mcp/context.ts";
-import { DEFAULT_VAULT_ID, VaultRegistry } from "../src/vaults/registry.ts";
+import { VaultRegistry } from "../src/vaults/registry.ts";
 
 export interface TmpVault {
   dir: string;
@@ -67,9 +67,8 @@ export function fixtureVault(): TmpVault {
   });
 }
 
-/** A registry holding just the default vault, for tests that build their own context. */
+/** A registry holding one vault, served at /v/main/mcp, for tests that build their own context. */
 export function singleVault(config: Config, db: Database, ctx: VaultContext): VaultRegistry {
-  return new VaultRegistry([
-    { id: DEFAULT_VAULT_ID, slug: "default", name: "Vault", config, ctx, settings: vaultSettings(db, DEFAULT_VAULT_ID) },
-  ]);
+  const id = Number(db.query("INSERT INTO vaults (slug, name) VALUES ('main', 'Vault')").run().lastInsertRowid);
+  return new VaultRegistry([{ id, slug: "main", name: "Vault", config, ctx, settings: vaultSettings(db, id) }]);
 }

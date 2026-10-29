@@ -26,7 +26,9 @@ function makeConfig(obBin: string): Config {
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "obmcp-sup-"));
-  settings = vaultSettings(openDatabase(":memory:"), 1);
+  const db = openDatabase(":memory:");
+  const id = Number(db.query("INSERT INTO vaults (slug, name) VALUES ('sup', 'Sup')").run().lastInsertRowid);
+  settings = vaultSettings(db, id);
 });
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));

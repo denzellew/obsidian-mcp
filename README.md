@@ -41,20 +41,20 @@ docker compose -f deploy/docker-compose.local.yml logs app   # ← setup token
 # open http://localhost:3000/setup  (APP_PORT=3100 … to use another port)
 ```
 
-One `app` container serves every vault: add more from **Manage vaults…** in the vault switcher. Each vault has its own MCP endpoint (`/v/<slug>/mcp`; the first vault also answers at `/mcp`), tokens, connections, Obsidian Sync login, and snapshots.
+One `app` container serves every vault. It starts with none: after setup, add each vault from **Manage vaults…** in the vault switcher. Each vault has its own MCP endpoint (`/v/<slug>/mcp`), tokens, connections, Obsidian Sync login, and snapshots.
 
 Open `https://your-host/setup`, paste the token, and register a passkey. That passkey is now the only way into the management UI; add more from the Passkeys page.
 
 ### Connect Claude Desktop / claude.ai
 
-Settings → Connectors → Add custom connector → `https://your-host/mcp`. Claude discovers the OAuth endpoints, registers itself, and sends you to your server to approve with your passkey. Done.
+Settings → Connectors → Add custom connector → `https://your-host/v/<slug>/mcp` (one connector per vault; the URL is on the vault's Dashboard). Claude discovers the OAuth endpoints, registers itself, and sends you to your server to approve with your passkey. Done.
 
 ### Connect Claude Code
 
 Create a token in the UI (Tokens → name it → copy once), then:
 
 ```sh
-claude mcp add --transport http obsidian https://your-host/mcp \
+claude mcp add --transport http obsidian https://your-host/v/<slug>/mcp \
   --header "Authorization: Bearer obmcp_..."
 ```
 
@@ -104,7 +104,7 @@ Design notes:
 - First-run trust: `/setup` requires a token printed to server logs (proof of box ownership); the page 404s once a passkey exists.
 - Hostname handling: when `PUBLIC_URL` is unset the origin/rpID are derived from the proxy's forwarded headers, and the WebAuthn rpID is **pinned** at first-passkey setup — a later request arriving with a different host is rejected (use `AUTH_RESET=1` to re-key if the hostname legitimately changes). WebAuthn's crypto binds each credential to the browser-signed origin regardless, so a forged forwarded header cannot impersonate your host.
 - MCP: OAuth 2.1 (PKCE S256 mandatory, RFC 8414/9728 metadata, RFC 7591 DCR, refresh rotation with reuse detection) **or** static bearer tokens. All tokens stored as SHA-256 hashes, shown once, revocable from the UI; revocation also kills live streams.
-- Host-header guard (DNS rebinding), Origin checks on `/mcp`, CSRF protection on the UI, rate-limited auth endpoints.
+- Host-header guard (DNS rebinding), Origin checks on the MCP endpoints, CSRF protection on the UI, rate-limited auth endpoints.
 - `data/db/app.db` contains only hashes and public keys — safe to back up.
 
 ## Development

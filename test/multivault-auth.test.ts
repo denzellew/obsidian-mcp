@@ -17,6 +17,7 @@ let db: Database;
 let vaults: VaultRegistry;
 let server: ReturnType<typeof Bun.serve>;
 let base: string;
+let knowledgeId: number;
 let personalId: number;
 
 const REDIRECT = "http://localhost:33418/callback";
@@ -25,6 +26,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "obmcp-multivault-"));
   const config = { ...loadConfig({ DATA_DIR: dir } as unknown as NodeJS.ProcessEnv), syncAutostart: false, obBin: "/nonexistent/ob" };
   db = openDatabase(":memory:");
+  knowledgeId = Number(db.query("INSERT INTO vaults (slug, name) VALUES ('knowledge', 'Knowledge')").run().lastInsertRowid);
   personalId = Number(db.query("INSERT INTO vaults (slug, name) VALUES ('personal', 'Personal')").run().lastInsertRowid);
   vaults = await VaultRegistry.boot(config, db);
   const app = createApp({ config, db, vaults, setupState: { token: "setup_testtoken", pendingUserHandle: null } });
@@ -118,28 +120,29 @@ async function oauthFor(clientId: string, resource: string, tokenResource?: stri
 
 describe("per-vault MCP endpoints", () => {
   test("static tokens only open the vault they were issued for", async () => {
-    const def = createApiToken(db, "default-token").token;
+    const knowledge = createApiToken(db, "knowledge-token", knowledgeId).token;
     const personal = createApiToken(db, "personal-token", personalId).token;
 
-    expect((await ping("/mcp", def)).status).toBe(200);
-    expect((await ping("/v/default/mcp", def)).status).toBe(200);
-    expect((await ping("/v/personal/mcp", def)).status).toBe(401);
+    expect((await ping("/v/knowledge/mcp", knowledge)).status).toBe(200);
+    expect((await ping("/v/personal/mcp", knowledge)).status).toBe(401);
 
     expect((await ping("/v/personal/mcp", personal)).status).toBe(200);
-    expect((await ping("/mcp", personal)).status).toBe(401);
-    expect((await ping("/v/default/mcp", personal)).status).toBe(401);
+    expect((await ping("/v/knowledge/mcp", personal)).status).toBe(401);
+
+    // there is no default vault behind the bare endpoint
+    expect((await ping("/mcp", knowledge)).status).toBe(404);
   });
 
   test("cross-vault 401 points the client at the right vault's metadata", async () => {
-    const def = createApiToken(db, "default-token").token;
-    const res = await ping("/v/personal/mcp", def);
+    const knowledge = createApiToken(db, "knowledge-token", knowledgeId).token;
+    const res = await ping("/v/personal/mcp", knowledge);
     expect(res.headers.get("www-authenticate")).toContain(`${base}/.well-known/oauth-protected-resource/v/personal/mcp`);
     expect(res.headers.get("www-authenticate")).toContain('error="invalid_token"');
     expect(((await res.json()) as { error_description: string }).error_description).toContain("'personal'");
   });
 
   test("unknown vault slug is a 404, not an auth challenge", async () => {
-    const res = await ping("/v/nope/mcp", createApiToken(db, "t").token);
+    const res = await ping("/v/nope/mcp", createApiToken(db, "t", knowledgeId).token);
     expect(res.status).toBe(404);
     expect(res.headers.get("www-authenticate")).toBeNull();
   });
@@ -164,8 +167,8 @@ describe("per-vault OAuth", () => {
     const personal = (await (await fetch(`${base}/.well-known/oauth-protected-resource/v/personal/mcp`)).json()) as Record<string, unknown>;
     expect(personal.resource).toBe(`${base}/v/personal/mcp`);
     expect(personal.authorization_servers).toEqual([base]);
-    const legacy = (await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json()) as Record<string, unknown>;
-    expect(legacy.resource).toBe(`${base}/mcp`);
+    expect((await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).status).toBe(404);
+    expect((await fetch(`${base}/.well-known/oauth-protected-resource`)).status).toBe(404);
     expect((await fetch(`${base}/.well-known/oauth-protected-resource/v/nope/mcp`)).status).toBe(404);
   });
 
@@ -175,7 +178,7 @@ describe("per-vault OAuth", () => {
     expect(consentHtml).toContain("Personal");
     const { access_token, refresh_token } = (await tokenRes.json()) as { access_token: string; refresh_token: string };
     expect((await ping("/v/personal/mcp", access_token)).status).toBe(200);
-    expect((await ping("/mcp", access_token)).status).toBe(401);
+    expect((await ping("/v/knowledge/mcp", access_token)).status).toBe(401);
 
     // refreshing keeps the binding
     const refreshed = await fetch(`${base}/oauth/token`, {
@@ -185,13 +188,13 @@ describe("per-vault OAuth", () => {
     });
     const next = (await refreshed.json()) as { access_token: string };
     expect((await ping("/v/personal/mcp", next.access_token)).status).toBe(200);
-    expect((await ping("/v/default/mcp", next.access_token)).status).toBe(401);
+    expect((await ping("/v/knowledge/mcp", next.access_token)).status).toBe(401);
   });
 
   test("consent for one vault does not carry over to another", async () => {
     const clientId = await registerClient();
-    expect((await oauthFor(clientId, `${base}/mcp`)).consentShown).toBe(true);
-    expect((await oauthFor(clientId, `${base}/v/default/mcp`)).consentShown).toBe(false);
+    expect((await oauthFor(clientId, `${base}/v/knowledge/mcp`)).consentShown).toBe(true);
+    expect((await oauthFor(clientId, `${base}/v/knowledge/mcp`)).consentShown).toBe(false);
     expect((await oauthFor(clientId, `${base}/v/personal/mcp`)).consentShown).toBe(true);
     expect((await oauthFor(clientId, `${base}/v/personal/mcp`)).consentShown).toBe(false);
   });
@@ -204,7 +207,7 @@ describe("per-vault OAuth", () => {
 
   test("token request naming a different vault than the code → invalid_target", async () => {
     const clientId = await registerClient();
-    const { tokenRes } = await oauthFor(clientId, `${base}/v/personal/mcp`, `${base}/mcp`);
+    const { tokenRes } = await oauthFor(clientId, `${base}/v/personal/mcp`, `${base}/v/knowledge/mcp`);
     expect(tokenRes.status).toBe(400);
     expect(((await tokenRes.json()) as { error: string }).error).toBe("invalid_target");
   });

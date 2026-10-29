@@ -27,9 +27,9 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "obmcp-vault-ui-"));
   config = { ...loadConfig({ DATA_DIR: dir } as unknown as NodeJS.ProcessEnv), syncAutostart: false, obBin: "/nonexistent/ob" };
   db = openDatabase(":memory:");
-  db.query("INSERT INTO vaults (slug, name) VALUES ('personal', 'Personal')").run();
+  db.query("INSERT INTO vaults (slug, name) VALUES ('knowledge', 'Knowledge'), ('personal', 'Personal')").run();
   vaults = await VaultRegistry.boot(config, db);
-  def = vaults.default();
+  def = vaults.get("knowledge")!;
   personal = vaults.get("personal")!;
   const app = createApp({ config, db, vaults, setupState: { token: "setup_testtoken", pendingUserHandle: null } });
   server = Bun.serve({ port: 0, fetch: app.fetch });
@@ -61,12 +61,12 @@ function post(path: string, cookie: string, form: Record<string, string>, header
 }
 
 describe("vault switcher", () => {
-  test("defaults to the default vault and lists every vault", async () => {
+  test("starts on the first vault and lists every vault", async () => {
     const html = await (await fetch(`${base}/app`, { headers: { Cookie: as() } })).text();
-    expect(html).toContain('<option value="default" selected="">Vault</option>');
+    expect(html).toContain('<option value="knowledge" selected="">Knowledge</option>');
     expect(html).toContain('<option value="personal">Personal</option>');
-    expect(html).toContain(`hx-headers="{&quot;X-Vault&quot;:&quot;default&quot;}"`);
-    expect(html).toContain(`${base}/mcp`);
+    expect(html).toContain(`hx-headers="{&quot;X-Vault&quot;:&quot;knowledge&quot;}"`);
+    expect(html).toContain(`${base}/v/knowledge/mcp`);
   });
 
   test("switching sets the cookie and returns to the same section", async () => {
@@ -85,10 +85,10 @@ describe("vault switcher", () => {
     expect(html).toContain(`${base}/v/personal/mcp`);
   });
 
-  test("unknown vault is refused; a stale cookie falls back to the default vault", async () => {
+  test("unknown vault is refused; a stale cookie falls back to the first vault", async () => {
     expect((await post("/app/vault", as(), { vault: "nope" })).status).toBe(400);
     const html = await (await fetch(`${base}/app`, { headers: { Cookie: as("deleted-vault") } })).text();
-    expect(html).toContain('<option value="default" selected="">Vault</option>');
+    expect(html).toContain('<option value="knowledge" selected="">Knowledge</option>');
   });
 });
 
@@ -96,8 +96,8 @@ describe("csrf", () => {
   // PUBLIC_URL is unset here, so the origin is derived per request (localhost:<port>,
   // not the localhost:3000 fallback) the same way it is behind a proxy.
   test("management forms check the request's derived public origin", async () => {
-    expect((await post("/app/vault", as(), { vault: "default" })).status).toBe(302);
-    expect((await post("/app/vault", as(), { vault: "default" }, { Origin: "https://evil.example" })).status).toBe(403);
+    expect((await post("/app/vault", as(), { vault: "knowledge" })).status).toBe(302);
+    expect((await post("/app/vault", as(), { vault: "knowledge" }, { Origin: "https://evil.example" })).status).toBe(403);
   });
 });
 
@@ -110,7 +110,7 @@ describe("stale-tab guard", () => {
   });
 
   test("a tab rendered for another vault is refused and nothing changes", async () => {
-    const res = await post("/app/guidance", as("personal"), { guidance: "Wrong vault" }, { "HX-Request": "true", "X-Vault": "default" });
+    const res = await post("/app/guidance", as("personal"), { guidance: "Wrong vault" }, { "HX-Request": "true", "X-Vault": "knowledge" });
     expect(res.status).toBe(409);
     expect(res.headers.get("hx-refresh")).toBe("true");
     expect(personal.settings.get("vault_instructions")).toBe("Personal rules");
@@ -126,7 +126,7 @@ describe("stale-tab guard", () => {
   test("plain forms carry the vault as a hidden field", async () => {
     const page = await (await fetch(`${base}/app/sync`, { headers: { Cookie: as("personal") } })).text();
     expect(page).not.toContain('action="/app/sync/start"'); // sync not configured: no plain forms yet
-    const stale = await post("/app/sync/start", as("personal"), { _vault: "default" });
+    const stale = await post("/app/sync/start", as("personal"), { _vault: "knowledge" });
     expect(stale.status).toBe(409);
     expect(await stale.text()).toContain("Nothing was changed");
     expect(personal.sync!.desiredRunning()).toBe(false);
@@ -147,13 +147,13 @@ describe("scoped pages", () => {
     expect(created).toBeDefined();
     expect(listApiTokens(db, def.id).some((t) => t.name === "personal-laptop")).toBe(false);
 
-    const defaultPage = await (await fetch(`${base}/app/tokens`, { headers: { Cookie: as("default") } })).text();
+    const defaultPage = await (await fetch(`${base}/app/tokens`, { headers: { Cookie: as("knowledge") } })).text();
     expect(defaultPage).not.toContain("personal-laptop");
 
-    // revoking from the default vault's page can't reach a personal token
+    // revoking from the knowledge vault's page can't reach a personal token
     const del = await fetch(`${base}/app/tokens/${created.id}`, {
       method: "DELETE",
-      headers: { Cookie: as("default"), Origin: base, "HX-Request": "true", "X-Vault": "default" },
+      headers: { Cookie: as("knowledge"), Origin: base, "HX-Request": "true", "X-Vault": "knowledge" },
     });
     expect(del.status).toBe(200);
     expect(listApiTokens(db, personal.id).find((t) => t.id === created.id)!.revoked_at).toBeNull();
@@ -180,12 +180,12 @@ describe("scoped pages", () => {
     expect(del.status).toBe(200);
     const consents = db.query<{ vault_id: number }, []>("SELECT vault_id FROM oauth_consents WHERE client_id = 'obcl_both'").all();
     expect(consents.map((r) => r.vault_id)).toEqual([def.id]);
-    const defaultPage = await (await fetch(`${base}/app/connections`, { headers: { Cookie: as("default") } })).text();
+    const defaultPage = await (await fetch(`${base}/app/connections`, { headers: { Cookie: as("knowledge") } })).text();
     expect(defaultPage).toContain("Both Vaults");
 
     await fetch(`${base}/app/connections/obcl_both`, {
       method: "DELETE",
-      headers: { Cookie: as("default"), Origin: base, "HX-Request": "true", "X-Vault": "default" },
+      headers: { Cookie: as("knowledge"), Origin: base, "HX-Request": "true", "X-Vault": "knowledge" },
     });
     expect(db.query("SELECT 1 FROM oauth_clients WHERE client_id = 'obcl_both'").get()).toBeNull();
   });
@@ -208,7 +208,6 @@ describe("vault management", () => {
     expect(res.headers.get("set-cookie")).toBeNull();
     const html = await (await fetch(`${base}/app/vaults`, { headers: { Cookie: as("personal") } })).text();
     expect(html).toContain(`${base}/v/personal/mcp`);
-    expect(html).toContain("default vault");
   });
 
   test("bad and taken slugs are refused", async () => {
@@ -216,7 +215,7 @@ describe("vault management", () => {
     expect(await bad.text()).toContain("Slug must be");
     const taken = await post("/app/vaults", as(), { name: "Again", slug: "personal" }, { "HX-Request": "true" });
     expect(await taken.text()).toContain("already exists");
-    expect(vaults.all().map((v) => v.slug)).toEqual(["default", "personal"]);
+    expect(vaults.all().map((v) => v.slug)).toEqual(["knowledge", "personal"]);
   });
 
   test("adding a vault serves it right away and switches to its sync setup", async () => {
@@ -241,12 +240,6 @@ describe("vault management", () => {
     expect(db.query<{ name: string }, []>("SELECT name FROM vaults WHERE slug = 'work'").get()!.name).toBe("Day Job");
   });
 
-  test("the default vault can't be removed", async () => {
-    const res = await fetch(`${base}/app/vaults/default`, { method: "DELETE", headers: { Cookie: as(), Origin: base, "HX-Request": "true" } });
-    expect(await res.text()).toContain("The default vault can");
-    expect(vaults.get("default")).toBeDefined();
-  });
-
   test("removing a vault revokes its credentials but keeps its files", async () => {
     const work = vaults.get("work")!;
     const token = createApiToken(db, "work-token-2", work.id).token;
@@ -262,9 +255,9 @@ describe("vault management", () => {
     expect(db.query("SELECT 1 FROM oauth_clients WHERE client_id = 'obcl_work'").get()).toBeNull();
     expect(existsSync(join(work.config.vaultDir, "Kept.md"))).toBe(true);
 
-    // a stale switcher cookie falls back to the default vault
+    // a stale switcher cookie falls back to the first vault
     const html = await (await fetch(`${base}/app`, { headers: { Cookie: as("work") } })).text();
-    expect(html).toContain('<option value="default" selected="">Vault</option>');
+    expect(html).toContain('<option value="knowledge" selected="">Knowledge</option>');
   });
 
   test("re-adding a removed slug picks its files back up", async () => {
@@ -272,5 +265,19 @@ describe("vault management", () => {
     const work = vaults.get("work")!;
     expect((await work.ctx.store.readText("Kept.md")).text).toBe("still here\n");
     expect(listApiTokens(db, work.id)).toEqual([]);
+  });
+
+  test("with every vault removed, the UI asks for a new one", async () => {
+    for (const slug of ["work", "personal", "knowledge"]) {
+      await fetch(`${base}/app/vaults/${slug}`, { method: "DELETE", headers: { Cookie: as(), Origin: base, "HX-Request": "true" } });
+    }
+    expect(vaults.all()).toEqual([]);
+    const res = await fetch(`${base}/app/tokens`, { headers: { Cookie: as("knowledge") }, redirect: "manual" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/app/vaults");
+    const html = await (await fetch(`${base}/app/vaults`, { headers: { Cookie: as() } })).text();
+    expect(html).toContain("No vaults yet");
+    expect(html).toContain("Add a vault");
+    expect(html).not.toContain("hx-headers");
   });
 });

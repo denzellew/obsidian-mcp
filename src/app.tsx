@@ -48,7 +48,6 @@ export type AppEnv = AuthEnv & {
 
 export function createApp(deps: AppDeps) {
   const { config, db } = deps;
-  const vault = deps.vaults.default();
   const app = new Hono<AppEnv>();
 
   // lets Layout read the selected vault without threading it through every page
@@ -88,7 +87,6 @@ export function createApp(deps: AppDeps) {
   app.route("/", loginRouter(db, config));
 
   // --- MCP endpoints (bearer auth, one per vault) ---
-  // /mcp is the default vault's original endpoint, kept so existing clients keep working.
   const serveMcp = async (c: Context<AppEnv>) => {
     const transport = new StreamableHTTPTransport();
     const principal = c.var.principal!;
@@ -110,8 +108,10 @@ export function createApp(deps: AppDeps) {
     transport.onclose = unregister;
     return transport.handleRequest(c);
   };
-  app.use("/mcp", (c, next) => (c.set("vault", vault), next()), mcpOriginGuard(), requireBearer(db));
-  app.all("/mcp", serveMcp);
+  // No vault answers here; say where they are rather than issuing an auth challenge.
+  app.all("/mcp", (c) =>
+    c.json({ error: "not_found", error_description: `Each vault has its own endpoint: ${c.var.publicOrigin}/v/<vault>/mcp` }, 404),
+  );
   app.use(
     "/v/:slug/mcp",
     async (c, next) => {
