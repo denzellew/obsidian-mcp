@@ -18,7 +18,7 @@ function ConnectionList(props: { connections: ConnectionRow[] }) {
   if (props.connections.length === 0) {
     return (
       <p class="text-sm text-text-muted">
-        No OAuth connections yet. Add this server as a custom connector in Claude Desktop or claude.ai and approve it here.
+        No OAuth connections to this vault yet. Add its MCP URL as a custom connector in Claude Desktop or claude.ai and approve it here.
       </p>
     );
   }
@@ -59,7 +59,7 @@ export function connectionsRouter(db: Database): Hono<AuthEnv> {
           <h1 class="text-xl font-semibold">OAuth connections</h1>
           <Card title="Approved clients">
             <div id="connection-list">
-              <ConnectionList connections={listConnections(db)} />
+              <ConnectionList connections={listConnections(db, c.var.vault!.id)} />
             </div>
           </Card>
         </div>
@@ -69,10 +69,13 @@ export function connectionsRouter(db: Database): Hono<AuthEnv> {
 
   app.delete("/:clientId", (c) => {
     const clientId = decodeURIComponent(c.req.param("clientId"));
-    const name = listConnections(db).find((conn) => conn.client_id === clientId)?.client_name ?? clientId;
-    revokeClient(db, clientId);
-    recordAdmin(db, "oauth.revoke", { target: name });
-    return c.html(<ConnectionList connections={listConnections(db)} />);
+    const vaultId = c.var.vault!.id;
+    const conn = listConnections(db, vaultId).find((conn) => conn.client_id === clientId);
+    if (conn) {
+      revokeClient(db, clientId, vaultId);
+      recordAdmin(db, "oauth.revoke", { target: conn.client_name, vaultId });
+    }
+    return c.html(<ConnectionList connections={listConnections(db, vaultId)} />);
   });
 
   return app;

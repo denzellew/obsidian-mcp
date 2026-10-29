@@ -162,7 +162,7 @@ export function recordMcpCall(
 export function recordAdmin(
   db: Database,
   event: string,
-  opts: { target?: string | null; status?: "ok" | "error"; detail?: string | null; actorName?: string } = {},
+  opts: { target?: string | null; status?: "ok" | "error"; detail?: string | null; actorName?: string; vaultId?: number } = {},
 ) {
   insert(db, {
     source: adminSourceFor(event),
@@ -173,6 +173,7 @@ export function recordAdmin(
     target: opts.target ?? null,
     status: opts.status ?? "ok",
     detail: opts.detail ?? null,
+    vaultId: opts.vaultId,
   });
 }
 
@@ -182,6 +183,8 @@ export interface AuditQuery {
   limit?: number;
   beforeId?: number;
   source?: AuditSource;
+  /** Events for this vault plus server-wide ones (logins, passkeys). */
+  vaultId?: number;
 }
 
 export function listAudit(db: Database, q: AuditQuery = {}): AuditEntry[] {
@@ -195,6 +198,10 @@ export function listAudit(db: Database, q: AuditQuery = {}): AuditEntry[] {
   if (q.source) {
     where.push("source = ?");
     params.push(q.source);
+  }
+  if (q.vaultId !== undefined) {
+    where.push("(vault_id = ? OR vault_id IS NULL)");
+    params.push(q.vaultId);
   }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   params.push(limit);

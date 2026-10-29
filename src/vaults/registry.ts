@@ -32,6 +32,11 @@ export interface VaultInstance extends VaultRow {
   sync?: SyncSupervisor;
 }
 
+/** Path of a vault's MCP endpoint; the default vault keeps its original /mcp. */
+export function mcpPath(vault: VaultRow): string {
+  return vault.id === DEFAULT_VAULT_ID ? "/mcp" : `/v/${vault.slug}/mcp`;
+}
+
 export function listVaultRows(db: Database): VaultRow[] {
   return db.query<VaultRow, []>("SELECT id, slug, name FROM vaults ORDER BY id").all();
 }

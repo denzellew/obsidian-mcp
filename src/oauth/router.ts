@@ -395,7 +395,7 @@ export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hon
     }
     db.query("UPDATE oauth_clients SET consented_at = unixepoch() WHERE client_id = ?").run(v.params.client_id);
     db.query("INSERT OR REPLACE INTO oauth_consents (client_id, vault_id) VALUES (?, ?)").run(v.params.client_id, v.params.vault.id);
-    recordAdmin(db, "oauth.consent", { target: `${v.client.client_name} → ${v.params.vault.name}` });
+    recordAdmin(db, "oauth.consent", { target: v.client.client_name, vaultId: v.params.vault.id });
     return c.redirect(issueCodeAndRedirect(db, v.params));
   });
 
@@ -409,24 +409,39 @@ export interface ConnectionRow extends ClientRow {
   grants: { id: string; created_at: number; last_used_at: number | null; access_expires_at: number }[];
 }
 
-export function listConnections(db: Database): ConnectionRow[] {
-  const clients = db.query<ClientRow, []>("SELECT * FROM oauth_clients WHERE consented_at IS NOT NULL ORDER BY consented_at DESC").all();
+/** Clients approved for one vault, with their live grants for it. */
+export function listConnections(db: Database, vaultId: number): ConnectionRow[] {
+  const clients = db
+    .query<ClientRow, [number]>(
+      `SELECT c.client_id, c.client_name, c.redirect_uris, c.logo_uri, c.created_at, k.consented_at
+       FROM oauth_clients c JOIN oauth_consents k ON k.client_id = c.client_id
+       WHERE k.vault_id = ? ORDER BY k.consented_at DESC`,
+    )
+    .all(vaultId);
   return clients.map((client) => ({
     ...client,
     grants: db
-      .query<{ id: string; created_at: number; last_used_at: number | null; access_expires_at: number }, [string]>(
-        "SELECT id, created_at, last_used_at, access_expires_at FROM oauth_grants WHERE client_id = ? AND revoked_at IS NULL ORDER BY created_at DESC",
+      .query<{ id: string; created_at: number; last_used_at: number | null; access_expires_at: number }, [string, number]>(
+        "SELECT id, created_at, last_used_at, access_expires_at FROM oauth_grants WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL ORDER BY created_at DESC",
       )
-      .all(client.client_id),
+      .all(client.client_id, vaultId),
   }));
 }
 
-export function revokeClient(db: Database, clientId: string) {
+/** Revoke a client's access to one vault. The registration itself goes once no vault is left approved. */
+export function revokeClient(db: Database, clientId: string, vaultId: number) {
   const grants = db
-    .query<{ access_token_hash: string }, [string]>(
-      "SELECT access_token_hash FROM oauth_grants WHERE client_id = ? AND revoked_at IS NULL",
+    .query<{ access_token_hash: string }, [string, number]>(
+      "SELECT access_token_hash FROM oauth_grants WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL",
     )
-    .all(clientId);
-  db.query("DELETE FROM oauth_clients WHERE client_id = ?").run(clientId); // cascades grants
+    .all(clientId, vaultId);
+  db.transaction(() => {
+    db.query("DELETE FROM oauth_grants WHERE client_id = ? AND vault_id = ?").run(clientId, vaultId);
+    db.query("DELETE FROM oauth_consents WHERE client_id = ? AND vault_id = ?").run(clientId, vaultId);
+    db.query("DELETE FROM oauth_clients WHERE client_id = ? AND NOT EXISTS (SELECT 1 FROM oauth_consents WHERE client_id = ?)").run(
+      clientId,
+      clientId,
+    );
+  })();
   for (const g of grants) abortRegistry.abort(g.access_token_hash);
 }

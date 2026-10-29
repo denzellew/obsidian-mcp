@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import type { Database } from "bun:sqlite";
-import type { Config } from "../../config.ts";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import { createApiToken, listApiTokens, revokeApiToken, type ApiTokenRow } from "../../auth/tokens.ts";
 import { recordAdmin } from "../../audit.ts";
+import { mcpPath } from "../../vaults/registry.ts";
 
 function ago(unix: number | null): string {
   if (!unix) return "never";
@@ -105,17 +105,20 @@ function NewTokenResult(props: { token: string; name: string }) {
   );
 }
 
-export function tokensRouter(db: Database, config: Config): Hono<AuthEnv> {
+export function tokensRouter(db: Database): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
-  app.get("/", (c) => c.html(<TokensPage tokens={listApiTokens(db)} mcpUrl={`${c.var.publicOrigin}/mcp`} />));
+  app.get("/", (c) =>
+    c.html(<TokensPage tokens={listApiTokens(db, c.var.vault!.id)} mcpUrl={`${c.var.publicOrigin}${mcpPath(c.var.vault!)}`} />),
+  );
 
   app.post("/", async (c) => {
     const body = await c.req.parseBody();
     const name = String(body.name ?? "").trim().slice(0, 100);
     if (!name) return c.html(<p class="mt-3 text-sm text-danger">Name is required.</p>);
-    const { token } = createApiToken(db, name);
-    recordAdmin(db, "token.create", { target: name });
+    const vaultId = c.var.vault!.id;
+    const { token } = createApiToken(db, name, vaultId);
+    recordAdmin(db, "token.create", { target: name, vaultId });
     c.header("HX-Trigger", "tokenCreated");
     return c.html(
       <>
@@ -125,13 +128,15 @@ export function tokensRouter(db: Database, config: Config): Hono<AuthEnv> {
     );
   });
 
-  app.get("/list", (c) => c.html(<TokenTable tokens={listApiTokens(db)} />));
+  app.get("/list", (c) => c.html(<TokenTable tokens={listApiTokens(db, c.var.vault!.id)} />));
 
   app.delete("/:id", (c) => {
     const id = c.req.param("id");
-    const name = listApiTokens(db).find((t) => t.id === id)?.name ?? id;
-    if (revokeApiToken(db, id)) recordAdmin(db, "token.revoke", { target: name });
-    return c.html(<TokenTable tokens={listApiTokens(db)} />);
+    const vaultId = c.var.vault!.id;
+    // only tokens of the selected vault can be revoked from its page
+    const token = listApiTokens(db, vaultId).find((t) => t.id === id);
+    if (token && revokeApiToken(db, id)) recordAdmin(db, "token.revoke", { target: token.name, vaultId });
+    return c.html(<TokenTable tokens={listApiTokens(db, vaultId)} />);
   });
 
   return app;

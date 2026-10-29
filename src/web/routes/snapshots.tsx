@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import type { Database } from "bun:sqlite";
-import { Layout, Card } from "../layout.tsx";
+import { Layout, Card, VaultField } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
-import type { VaultContext } from "../../mcp/context.ts";
 import { safePath } from "../../vault/paths.ts";
 import { recordAdmin } from "../../audit.ts";
 
@@ -14,10 +13,11 @@ function ago(iso: string): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> {
+export function snapshotsRouter(db: Database): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
   app.get("/", async (c) => {
+    const { ctx, config } = c.var.vault!;
     const path = c.req.query("path");
     const commits = await ctx.snapshotter.listCommits(50, path || undefined);
     return c.html(
@@ -78,9 +78,11 @@ export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> 
           </Card>
           <Card>
             <p class="text-xs text-text-muted">
-              Snapshots are plain git commits in <span class="font-mono">data/snapshots/vault.git</span> — for full
-              restores or diffs, use git directly:{" "}
-              <span class="font-mono">git --git-dir data/snapshots/vault.git --work-tree data/Vault log</span>
+              Snapshots are plain git commits in <span class="font-mono">{config.snapshotsDir}/vault.git</span> — for
+              full restores or diffs, use git directly:{" "}
+              <span class="font-mono">
+                git --git-dir {config.snapshotsDir}/vault.git --work-tree {config.vaultDir} log
+              </span>
             </p>
           </Card>
         </div>
@@ -89,6 +91,7 @@ export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> 
   });
 
   app.get("/:sha", async (c) => {
+    const { ctx } = c.var.vault!;
     const sha = c.req.param("sha");
     if (!/^[0-9a-f]{7,40}$/.test(sha)) return c.notFound();
     const files = await ctx.snapshotter.commitFiles(sha);
@@ -120,6 +123,7 @@ export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> 
   });
 
   app.get("/:sha/file", async (c) => {
+    const { ctx } = c.var.vault!;
     const sha = c.req.param("sha");
     const path = c.req.query("path") ?? "";
     if (!/^[0-9a-f]{7,40}$/.test(sha) || !path) return c.notFound();
@@ -134,6 +138,7 @@ export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> 
             {content !== null ? (
               <form method="post" action={`/app/snapshots/${sha}/restore`}>
                 <input type="hidden" name="path" value={path} />
+                <VaultField />
                 <button
                   type="submit"
                   class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover"
@@ -159,6 +164,7 @@ export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> 
   });
 
   app.post("/:sha/restore", async (c) => {
+    const { ctx, id: vaultId } = c.var.vault!;
     const sha = c.req.param("sha");
     const body = await c.req.parseBody();
     const path = safePath(String(body.path ?? ""));
@@ -169,7 +175,7 @@ export function snapshotsRouter(ctx: VaultContext, db: Database): Hono<AuthEnv> 
     // snapshot — history is never rewritten
     await ctx.store.write(path, content);
     await ctx.snapshotter.commit(`restore: ${path} from ${sha.slice(0, 7)}`);
-    recordAdmin(db, "snapshot.restore", { target: path, detail: `from ${sha.slice(0, 7)}` });
+    recordAdmin(db, "snapshot.restore", { target: path, detail: `from ${sha.slice(0, 7)}`, vaultId });
     return c.redirect(`/app/snapshots?path=${encodeURIComponent(path)}`);
   });
 

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { Hono, type Context } from "hono";
 import { serveStatic } from "hono/bun";
 import { csrf } from "hono/csrf";
+import { contextStorage } from "hono/context-storage";
 import { StreamableHTTPTransport } from "@hono/mcp";
 import type { Config } from "./config.ts";
 import { createMcpServer } from "./mcp/server.ts";
@@ -27,6 +28,7 @@ import { syncRouter } from "./web/routes/sync.tsx";
 import { snapshotsRouter } from "./web/routes/snapshots.tsx";
 import { auditRouter } from "./web/routes/audit.tsx";
 import { guidanceRouter } from "./web/routes/guidance.tsx";
+import { selectVault, vaultSwitchRouter } from "./web/vault-context.tsx";
 import { recordMcpCall } from "./audit.ts";
 import type { VaultRegistry } from "./vaults/registry.ts";
 
@@ -48,6 +50,8 @@ export function createApp(deps: AppDeps) {
   const vault = deps.vaults.default();
   const app = new Hono<AppEnv>();
 
+  // lets Layout read the selected vault without threading it through every page
+  app.use("*", contextStorage());
   app.use("*", async (c, next) => {
     c.set("deps", deps);
     await next();
@@ -121,17 +125,18 @@ export function createApp(deps: AppDeps) {
   );
   app.all("/v/:slug/mcp", serveMcp);
 
-  // --- Management UI (session + CSRF) ---
-  app.use("/app/*", requireSession(db, { redirect: true }), csrf({ origin: config.origin }));
-  app.use("/app", requireSession(db, { redirect: true }));
-  app.route("/app/tokens", tokensRouter(db, config));
+  // --- Management UI (session + CSRF); pages act on the vault picked in the switcher ---
+  app.use("/app/*", requireSession(db, { redirect: true }), sameOriginCsrf, selectVault(deps.vaults));
+  app.use("/app", requireSession(db, { redirect: true }), selectVault(deps.vaults));
+  app.route("/app/vault", vaultSwitchRouter(deps.vaults));
+  app.route("/app/tokens", tokensRouter(db));
   app.route("/app/passkeys", passkeysRouter(db, config));
   app.route("/app/connections", connectionsRouter(db));
   app.route("/app/audit", auditRouter(db));
-  app.route("/app/guidance", guidanceRouter(db, vault.settings));
-  if (vault.sync) app.route("/app/sync", syncRouter(db, vault.config, vault.sync, vault.settings));
-  app.route("/app/snapshots", snapshotsRouter(vault.ctx, db));
-  app.route("/app", dashboardRouter(deps));
+  app.route("/app/guidance", guidanceRouter(db));
+  app.route("/app/sync", syncRouter(db));
+  app.route("/app/snapshots", snapshotsRouter(db));
+  app.route("/app", dashboardRouter());
 
   app.get("/", (c) => c.redirect("/app"));
 

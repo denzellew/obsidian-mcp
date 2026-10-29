@@ -63,12 +63,10 @@ export function createApiToken(db: Database, name: string, vaultId = DEFAULT_VAU
   return { token, row };
 }
 
-export function listApiTokens(db: Database): ApiTokenRow[] {
-  return db
-    .query<ApiTokenRow, []>(
-      "SELECT id, name, token_prefix, created_at, last_used_at, revoked_at FROM api_tokens ORDER BY created_at DESC",
-    )
-    .all();
+export function listApiTokens(db: Database, vaultId?: number): ApiTokenRow[] {
+  const cols = "SELECT id, name, token_prefix, created_at, last_used_at, revoked_at FROM api_tokens";
+  if (vaultId === undefined) return db.query<ApiTokenRow, []>(`${cols} ORDER BY created_at DESC`).all();
+  return db.query<ApiTokenRow, [number]>(`${cols} WHERE vault_id = ? ORDER BY created_at DESC`).all(vaultId);
 }
 
 const LAST_USED_THROTTLE_S = 60;
