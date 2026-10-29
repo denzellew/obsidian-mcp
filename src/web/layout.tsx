@@ -3,12 +3,11 @@ import { getContext } from "hono/context-storage";
 import type { AppEnv } from "../app.tsx";
 import type { VaultInstance } from "../vaults/registry.ts";
 
-/** The vault the management UI is showing, when rendering inside an /app request. */
-function selectedVault(): { current: VaultInstance; all: VaultInstance[] } | null {
+/** The vault the management UI is showing, when rendering inside an /app request; `current` is unset until a vault exists. */
+function selectedVault(): { current?: VaultInstance; all: VaultInstance[] } | null {
   try {
     const c = getContext<AppEnv>();
-    const current = c.var.vault;
-    return current ? { current, all: c.var.deps.vaults.all() } : null;
+    return c.req.path.startsWith("/app") ? { current: c.var.vault, all: c.var.deps.vaults.all() } : null;
   } catch {
     return null; // rendered outside a request (tests, error pages)
   }
@@ -17,7 +16,7 @@ function selectedVault(): { current: VaultInstance; all: VaultInstance[] } | nul
 /** Put in every plain (non-htmx) form that changes the selected vault; htmx requests send the header instead. */
 export function VaultField() {
   const v = selectedVault();
-  return v ? <input type="hidden" name="_vault" value={v.current.slug} /> : null;
+  return v?.current ? <input type="hidden" name="_vault" value={v.current.slug} /> : null;
 }
 
 export function Layout(props: { title?: string; children: Child; nav?: boolean; activeNav?: string }) {
@@ -32,7 +31,7 @@ export function Layout(props: { title?: string; children: Child; nav?: boolean; 
         <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
         <script src="/assets/vendor/htmx.min.js" defer></script>
       </head>
-      <body class="min-h-full" hx-headers={vault ? JSON.stringify({ "X-Vault": vault.current.slug }) : undefined}>
+      <body class="min-h-full" hx-headers={vault?.current ? JSON.stringify({ "X-Vault": vault.current.slug }) : undefined}>
         {props.nav !== false ? <Nav active={props.activeNav} vault={vault} /> : null}
         <main class={props.nav !== false ? "mx-auto max-w-6xl px-6 py-8" : ""}>{props.children}</main>
       </body>
@@ -69,7 +68,11 @@ function Nav(props: { active?: string; vault: ReturnType<typeof selectedVault> }
             {label}
           </a>
         ))}
-        {props.vault ? (
+        {props.vault && !props.vault.current ? (
+          <a href="/app/vaults" class="ml-auto shrink-0 rounded-md px-2 py-1.5 text-sm whitespace-nowrap text-accent-hover hover:underline">
+            Add a vault
+          </a>
+        ) : props.vault ? (
           <select
             name="vault"
             hx-post="/app/vault"
@@ -78,7 +81,7 @@ function Nav(props: { active?: string; vault: ReturnType<typeof selectedVault> }
             class="ml-auto max-w-36 shrink-0 truncate rounded-md border border-base-600 bg-base-800 px-2 py-1 text-sm text-text focus:border-accent focus:outline-none"
           >
             {props.vault.all.map((v) => (
-              <option value={v.slug} selected={v.id === props.vault!.current.id}>
+              <option value={v.slug} selected={v.id === props.vault!.current!.id}>
                 {v.name}
               </option>
             ))}

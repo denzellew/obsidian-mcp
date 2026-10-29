@@ -1,6 +1,6 @@
 # One portal serving every vault through a Cloudflare Tunnel. A single public
-# hostname covers all vaults: each is at https://<host>/v/<slug>/mcp (the first
-# one also at /mcp), with its own OAuth discovery, tokens, and sync.
+# hostname covers all vaults: each is at https://<host>/v/<slug>/mcp, with its
+# own OAuth discovery, tokens, and sync.
 #
 # 1. In Cloudflare Zero Trust, create a tunnel and point its public hostname
 #    (e.g. notes.example.com) at http://app:3000.
@@ -12,10 +12,6 @@
 #
 # PUBLIC_URL is optional: the app derives its public origin from cloudflared's
 # forwarded headers. Set it only to hard-pin the hostname.
-#
-# Coming from the old one-container-per-vault layout: stop it, then move
-# data/knowledge to data/app before the first start so that vault keeps its
-# passkeys, tokens, and sync link. Never run both against the same data.
 
 # Named explicitly: compose otherwise names the project after this folder
 # ("deploy"), so another checkout's deploy/ would replace these containers.

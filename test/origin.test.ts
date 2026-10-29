@@ -105,8 +105,8 @@ describe("derived mode end-to-end (behind a proxy)", () => {
   }
 
   test("OAuth metadata reflects the proxy hostname, not localhost", async () => {
-    const prm = (await (await proxied("/.well-known/oauth-protected-resource/mcp")).json()) as Record<string, unknown>;
-    expect(prm.resource).toBe(`https://${PROXY}/mcp`);
+    const prm = (await (await proxied("/.well-known/oauth-protected-resource/v/main/mcp")).json()) as Record<string, unknown>;
+    expect(prm.resource).toBe(`https://${PROXY}/v/main/mcp`);
     expect(prm.authorization_servers).toEqual([`https://${PROXY}`]);
 
     const as = (await (await proxied("/.well-known/oauth-authorization-server")).json()) as Record<string, unknown>;
@@ -115,7 +115,7 @@ describe("derived mode end-to-end (behind a proxy)", () => {
   });
 
   test("WWW-Authenticate points at the proxy host", async () => {
-    const res = await proxied("/mcp", { method: "POST" });
+    const res = await proxied("/v/main/mcp", { method: "POST" });
     expect(res.status).toBe(401);
     expect(res.headers.get("www-authenticate")).toContain(`https://${PROXY}/.well-known`);
   });

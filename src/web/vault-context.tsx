@@ -18,18 +18,26 @@ const SECTIONS = ["audit", "guidance", "tokens", "connections", "sync", "snapsho
 export const MANAGE_VAULTS = "";
 
 /**
- * Pick the vault the management UI is showing from the switcher cookie. The
- * cookie is shared by every tab, so each mutation must also name the vault its
- * page was rendered for; a tab left open across a switch is refused rather
- * than writing to the newly selected vault.
+ * Pick the vault the management UI is showing from the switcher cookie,
+ * falling back to the first vault; with none yet, vault pages send the owner
+ * to add one. The cookie is shared by every tab, so each mutation must also
+ * name the vault its page was rendered for; a tab left open across a switch is
+ * refused rather than writing to the newly selected vault.
  */
 export function selectVault(vaults: VaultRegistry): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
-    const vault = vaults.get(getCookie(c, VAULT_COOKIE) ?? "") ?? vaults.default();
-    c.set("vault", vault);
-    if (c.req.method === "GET" || c.req.method === "HEAD" || GLOBAL_PATHS.some((p) => c.req.path.startsWith(p))) {
-      return next();
+    const global = GLOBAL_PATHS.some((p) => c.req.path.startsWith(p));
+    const vault = vaults.get(getCookie(c, VAULT_COOKIE) ?? "") ?? vaults.all()[0];
+    if (!vault) {
+      if (global) return next();
+      if (c.req.header("HX-Request")) {
+        c.header("HX-Redirect", "/app/vaults");
+        return c.body(null);
+      }
+      return c.redirect("/app/vaults");
     }
+    c.set("vault", vault);
+    if (c.req.method === "GET" || c.req.method === "HEAD" || global) return next();
     const presented = c.req.header(VAULT_HEADER) ?? (await formField(c, VAULT_FIELD));
     if (presented === vault.slug) return next();
 

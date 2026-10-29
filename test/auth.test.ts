@@ -22,6 +22,7 @@ let snapsDir: string;
 let db: Database;
 let server: ReturnType<typeof Bun.serve>;
 let base: string;
+let vaultId: number;
 
 beforeAll(async () => {
   vault = tmpVault({ "Note.md": "hello\n" });
@@ -32,7 +33,9 @@ beforeAll(async () => {
   await snapshotter.init();
   const vaultCtx = createVaultContext({ store, links: new LinkIndex(store), snapshotter });
   const config = loadConfig({ DATA_DIR: vault.dir, PUBLIC_URL: "http://localhost:3000" } as unknown as NodeJS.ProcessEnv);
-  const app = createApp({ config, db, vaults: singleVault(config, db, vaultCtx), setupState: { token: "setup_testtoken", pendingUserHandle: null } });
+  const registry = singleVault(config, db, vaultCtx);
+  vaultId = registry.get("main")!.id;
+  const app = createApp({ config, db, vaults: registry, setupState: { token: "setup_testtoken", pendingUserHandle: null } });
   server = Bun.serve({ port: 0, fetch: app.fetch });
   base = `http://localhost:${server.port}`;
 });
@@ -68,7 +71,10 @@ async function registerClient(redirectUris = ["http://localhost:33418/callback"]
 }
 
 /** Full code flow with consent; returns the token response. */
+const RESOURCE = "http://localhost:3000/v/main/mcp";
+
 async function fullOAuthFlow(opts: { resource?: string } = {}) {
+  const resource = opts.resource ?? RESOURCE;
   const { client_id } = await registerClient();
   const { verifier, challenge } = pkcePair();
   const cookie = sessionCookieHeader();
@@ -76,8 +82,7 @@ async function fullOAuthFlow(opts: { resource?: string } = {}) {
   const authorizeUrl =
     `${base}/oauth/authorize?response_type=code&client_id=${client_id}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${challenge}` +
-    `&code_challenge_method=S256&state=xyz` +
-    (opts.resource ? `&resource=${encodeURIComponent(opts.resource)}` : "");
+    `&code_challenge_method=S256&state=xyz&resource=${encodeURIComponent(resource)}`;
 
   let res = await fetch(authorizeUrl, { headers: { Cookie: cookie }, redirect: "manual" });
   expect(res.status).toBe(200); // consent page (first time for this client)
@@ -91,7 +96,7 @@ async function fullOAuthFlow(opts: { resource?: string } = {}) {
     code_challenge: challenge,
     code_challenge_method: "S256",
     state: "xyz",
-    ...(opts.resource ? { resource: opts.resource } : {}),
+    resource,
   });
   res = await fetch(`${base}/oauth/consent`, {
     method: "POST",
@@ -123,7 +128,7 @@ async function fullOAuthFlow(opts: { resource?: string } = {}) {
 }
 
 async function mcpPing(token: string): Promise<number> {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/v/main/mcp`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -138,7 +143,7 @@ async function mcpPing(token: string): Promise<number> {
 
 describe("static tokens", () => {
   test("mint, verify, last-used, revoke", () => {
-    const { token, row } = createApiToken(db, "laptop");
+    const { token, row } = createApiToken(db, "laptop", vaultId);
     expect(token).toStartWith("obmcp_");
     expect(row.token_prefix).toBe(token.slice(0, 12));
     const principal = verifyBearer(db, token)!;
@@ -172,11 +177,18 @@ describe("sessions", () => {
   });
 });
 
-describe("/mcp auth", () => {
+describe("MCP auth", () => {
   test("401 without token, with WWW-Authenticate pointing at resource metadata", async () => {
-    const res = await fetch(`${base}/mcp`, { method: "POST" });
+    const res = await fetch(`${base}/v/main/mcp`, { method: "POST" });
     expect(res.status).toBe(401);
-    expect(res.headers.get("www-authenticate")).toContain("oauth-protected-resource/mcp");
+    expect(res.headers.get("www-authenticate")).toContain("oauth-protected-resource/v/main/mcp");
+  });
+
+  test("bare /mcp names no vault and says where they are", async () => {
+    const res = await fetch(`${base}/mcp`, { method: "POST" });
+    expect(res.status).toBe(404);
+    expect(res.headers.get("www-authenticate")).toBeNull();
+    expect(((await res.json()) as { error_description: string }).error_description).toContain("/v/<vault>/mcp");
   });
 
   test("401 with invalid token", async () => {
@@ -184,7 +196,7 @@ describe("/mcp auth", () => {
   });
 
   test("200 with valid static token, 401 after revoke", async () => {
-    const { token, row } = createApiToken(db, "mcp-test");
+    const { token, row } = createApiToken(db, "mcp-test", vaultId);
     expect(await mcpPing(token)).toBe(200);
     revokeApiToken(db, row.id);
     expect(await mcpPing(token)).toBe(401);
@@ -193,10 +205,10 @@ describe("/mcp auth", () => {
 
 describe("metadata endpoints", () => {
   test("protected resource metadata", async () => {
-    const res = await fetch(`${base}/.well-known/oauth-protected-resource/mcp`);
+    const res = await fetch(`${base}/.well-known/oauth-protected-resource/v/main/mcp`);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.authorization_servers).toEqual(["http://localhost:3000"]);
-    expect(String(body.resource)).toEndWith("/mcp");
+    expect(String(body.resource)).toBe("http://localhost:3000/v/main/mcp");
   });
 
   test("authorization server metadata advertises S256 + DCR", async () => {
@@ -269,6 +281,16 @@ describe("OAuth flow", () => {
     expect(res.headers.get("location")).toContain("error=invalid_request");
   });
 
+  test("missing resource indicator → invalid_target (no vault to assume)", async () => {
+    const { client_id } = await registerClient();
+    const { challenge } = pkcePair();
+    const res = await fetch(
+      `${base}/oauth/authorize?response_type=code&client_id=${client_id}&redirect_uri=${encodeURIComponent("http://localhost:33418/callback")}&code_challenge=${challenge}&code_challenge_method=S256`,
+      { headers: { Cookie: sessionCookieHeader() }, redirect: "manual" },
+    );
+    expect(res.headers.get("location")).toContain("error=invalid_target");
+  });
+
   test("wrong resource indicator → invalid_target", async () => {
     const { client_id } = await registerClient();
     const { challenge } = pkcePair();
@@ -279,8 +301,8 @@ describe("OAuth flow", () => {
     expect(res.headers.get("location")).toContain("error=invalid_target");
   });
 
-  test("full flow: consent → code → tokens → /mcp access", async () => {
-    const { tokens } = await fullOAuthFlow({ resource: "http://localhost:3000/mcp" });
+  test("full flow: consent → code → tokens → MCP access", async () => {
+    const { tokens } = await fullOAuthFlow();
     expect(tokens.access_token).toStartWith("obat_");
     expect(tokens.refresh_token).toStartWith("obrt_");
     expect(await mcpPing(tokens.access_token)).toBe(200);
@@ -290,7 +312,7 @@ describe("OAuth flow", () => {
     const { client_id, cookie } = await fullOAuthFlow();
     const { challenge } = pkcePair();
     const res = await fetch(
-      `${base}/oauth/authorize?response_type=code&client_id=${client_id}&redirect_uri=${encodeURIComponent("http://localhost:33418/callback")}&code_challenge=${challenge}&code_challenge_method=S256`,
+      `${base}/oauth/authorize?response_type=code&client_id=${client_id}&redirect_uri=${encodeURIComponent("http://localhost:33418/callback")}&code_challenge=${challenge}&code_challenge_method=S256&resource=${encodeURIComponent(RESOURCE)}`,
       { headers: { Cookie: cookie }, redirect: "manual" },
     );
     expect(res.status).toBe(302);
@@ -301,7 +323,7 @@ describe("OAuth flow", () => {
     const { client_id, cookie } = await fullOAuthFlow();
     const { challenge } = pkcePair(); // verifier discarded
     const res = await fetch(
-      `${base}/oauth/authorize?response_type=code&client_id=${client_id}&redirect_uri=${encodeURIComponent("http://localhost:33418/callback")}&code_challenge=${challenge}&code_challenge_method=S256`,
+      `${base}/oauth/authorize?response_type=code&client_id=${client_id}&redirect_uri=${encodeURIComponent("http://localhost:33418/callback")}&code_challenge=${challenge}&code_challenge_method=S256&resource=${encodeURIComponent(RESOURCE)}`,
       { headers: { Cookie: cookie }, redirect: "manual" },
     );
     const code = new URL(res.headers.get("location")!).searchParams.get("code")!;

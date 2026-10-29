@@ -1,6 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { DEFAULT_VAULT_ID } from "../db/index.ts";
 
 const B32 = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -55,7 +54,7 @@ export interface ApiTokenRow {
   revoked_at: number | null;
 }
 
-export function createApiToken(db: Database, name: string, vaultId = DEFAULT_VAULT_ID): { token: string; row: ApiTokenRow } {
+export function createApiToken(db: Database, name: string, vaultId: number): { token: string; row: ApiTokenRow } {
   const { token, hash, prefix } = mintToken("static");
   const id = randomBase32(8);
   db.query("INSERT INTO api_tokens (id, name, token_prefix, token_hash, vault_id) VALUES (?, ?, ?, ?, ?)").run(id, name, prefix, hash, vaultId);

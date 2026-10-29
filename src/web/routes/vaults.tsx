@@ -4,7 +4,7 @@ import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
 import type { Config } from "../../config.ts";
 import { recordAdmin } from "../../audit.ts";
-import { DEFAULT_VAULT_ID, mcpPath, VaultError, type VaultInstance, type VaultRegistry } from "../../vaults/registry.ts";
+import { mcpPath, VaultError, type VaultInstance, type VaultRegistry } from "../../vaults/registry.ts";
 import { setVaultCookie } from "../vault-context.tsx";
 
 const INPUT = "rounded-md border border-base-600 bg-base-800 px-3 py-2 text-sm focus:border-accent focus:outline-none";
@@ -16,6 +16,7 @@ function syncLabel(v: VaultInstance): { text: string; class: string } {
 }
 
 function VaultRows(props: { vaults: VaultInstance[]; origin: string }) {
+  if (props.vaults.length === 0) return <p class="text-sm text-text-muted">No vaults yet. Add one above to start serving it over MCP.</p>;
   return (
     <div class="space-y-4">
       {props.vaults.map((v) => {
@@ -27,19 +28,15 @@ function VaultRows(props: { vaults: VaultInstance[]; origin: string }) {
               <button type="submit" class="rounded-md border border-base-600 px-3 py-1.5 text-sm text-text-muted hover:text-text">
                 Rename
               </button>
-              {v.id === DEFAULT_VAULT_ID ? (
-                <span class="ml-auto text-xs text-text-muted">default vault</span>
-              ) : (
-                <button
-                  type="button"
-                  hx-delete={`/app/vaults/${v.slug}`}
-                  hx-target={`#vault-error-${v.slug}`}
-                  hx-confirm={`Remove '${v.name}'? Its tokens and connections are revoked and sync stops. Notes and snapshots stay on disk at ${v.config.vaultDir}.`}
-                  class="ml-auto text-sm text-danger hover:underline"
-                >
-                  Remove
-                </button>
-              )}
+              <button
+                type="button"
+                hx-delete={`/app/vaults/${v.slug}`}
+                hx-target={`#vault-error-${v.slug}`}
+                hx-confirm={`Remove '${v.name}'? Its tokens and connections are revoked and sync stops. Notes and snapshots stay on disk at ${v.config.vaultDir}.`}
+                class="ml-auto text-sm text-danger hover:underline"
+              >
+                Remove
+              </button>
             </form>
             <div id={`vault-error-${v.slug}`}></div>
             <dl class="mt-3 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
@@ -89,7 +86,7 @@ function VaultsPage(props: { vaults: VaultInstance[]; origin: string; dataDir: s
           <div id="add-vault-error"></div>
           <p class="mt-3 text-sm text-text-muted">
             The slug is permanent: it names the MCP endpoint (<span class="font-mono">/v/&lt;slug&gt;/mcp</span>) and the folder{" "}
-            <span class="font-mono">{props.dataDir}/vaults/&lt;slug&gt;/Vault</span>. The new vault starts empty with its own
+            <span class="font-mono">{props.dataDir}/vaults/&lt;slug&gt;/Vault</span>. Each vault starts empty with its own
             tokens, connections, and snapshots. Next you'll set up its Obsidian Sync, which uses its own login. To bring in an
             existing vault without Sync, copy its files into that folder.
           </p>

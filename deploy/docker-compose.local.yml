@@ -1,6 +1,6 @@
 # One portal serving every vault, run locally — builds from this checkout, no
-# tunnel. Each vault is at /v/<slug>/mcp (the first one also at /mcp); add
-# vaults from the switcher's "Manage vaults…" in the UI.
+# tunnel. It starts with no vaults: add them from "Manage vaults…" in the UI.
+# Each vault is at /v/<slug>/mcp.
 #
 # From the repo root:
 #   docker compose -f deploy/docker-compose.local.yml up -d --build

@@ -46,13 +46,14 @@ beforeAll(async () => {
     now: () => new Date(2026, 5, 12, 14, 30), // fixed: 2026-06-12
   });
   const config = loadConfig({ DATA_DIR: vault.dir, PUBLIC_URL: "http://localhost:3000" } as unknown as NodeJS.ProcessEnv);
-  const app = createApp({ config, db, vaults: singleVault(config, db, vaultCtx), setupState: { token: null, pendingUserHandle: null } });
+  const vaults = singleVault(config, db, vaultCtx);
+  const app = createApp({ config, db, vaults, setupState: { token: null, pendingUserHandle: null } });
   server = Bun.serve({ port: 0, fetch: app.fetch });
 
-  const { token } = createApiToken(db, "integration-test");
+  const { token } = createApiToken(db, "integration-test", vaults.get("main")!.id);
   client = new Client({ name: "test-client", version: "0.0.0" });
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(`http://localhost:${server.port}/mcp`), {
+    new StreamableHTTPClientTransport(new URL(`http://localhost:${server.port}/v/main/mcp`), {
       requestInit: { headers: { Authorization: `Bearer ${token}` } },
     }),
   );

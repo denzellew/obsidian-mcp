@@ -31,12 +31,11 @@ function getClient(db: Database, clientId: string): ClientRow | null {
 }
 
 /**
- * Map an RFC 8707 resource indicator to the vault it names. /mcp is the
- * default vault's legacy endpoint; an absent indicator also means the default
- * vault, for clients that predate resource indicators.
+ * Map an RFC 8707 resource indicator to the vault it names. It is required:
+ * with no default vault, a grant must say which vault it opens.
  */
 export function vaultForResource(vaults: VaultRegistry, origin: string, resource: string | undefined): VaultInstance | null {
-  if (!resource || resource === `${origin}/mcp`) return vaults.default();
+  if (!resource) return null;
   const prefix = `${origin}/v/`;
   if (!resource.startsWith(prefix) || !resource.endsWith("/mcp")) return null;
   return vaults.get(resource.slice(prefix.length, -"/mcp".length)) ?? null;
@@ -71,8 +70,6 @@ export function wellKnownRouter(vaults: VaultRegistry): Hono<AuthEnv> {
     scopes_supported: ["mcp"],
   });
   const cache = (c: { header: (k: string, v: string) => void }) => c.header("Cache-Control", "public, max-age=3600");
-  app.get("/oauth-protected-resource", (c) => (cache(c), c.json(prm(c.var.publicOrigin, "/mcp", "Obsidian MCP"))));
-  app.get("/oauth-protected-resource/mcp", (c) => (cache(c), c.json(prm(c.var.publicOrigin, "/mcp", "Obsidian MCP"))));
   app.get("/oauth-protected-resource/v/:slug/mcp", (c) => {
     const vault = vaults.get(c.req.param("slug"));
     if (!vault) return c.json({ error: "not_found", error_description: "No such vault" }, 404);
@@ -325,7 +322,7 @@ function validateAuthorizeRequest(
   if (!q.code_challenge) return err("invalid_request", "PKCE code_challenge is required");
   if ((q.code_challenge_method ?? "") !== "S256") return err("invalid_request", "code_challenge_method must be S256");
   const vault = vaultForResource(vaults, origin, q.resource);
-  if (!vault) return err("invalid_target", `resource must be ${origin}/mcp or ${origin}/v/<vault>/mcp for an existing vault`);
+  if (!vault) return err("invalid_target", `resource must be ${origin}/v/<vault>/mcp for an existing vault`);
   return {
     ok: true,
     client,

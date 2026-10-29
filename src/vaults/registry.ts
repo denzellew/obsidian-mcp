@@ -1,8 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type { Config } from "../config.ts";
-import { DEFAULT_VAULT_ID, vaultSettings, type VaultSettings } from "../db/index.ts";
+import { vaultSettings, type VaultSettings } from "../db/index.ts";
 import { abortRegistry } from "../auth/tokens.ts";
 import { createVaultContext, type VaultContext } from "../mcp/context.ts";
 import { Snapshotter } from "../snapshots/snapshotter.ts";
@@ -13,14 +13,9 @@ import { logger } from "../log.ts";
 
 const log = logger("vaults");
 
-export { DEFAULT_VAULT_ID };
-
 // Mirrors the CHECK in 0004_vaults.sql. Re-checked here because the slug is
 // joined into filesystem paths.
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-
-/** The name 0004_vaults.sql gives the pre-existing vault. */
-const DEFAULT_VAULT_NAME = "Vault";
 
 /** A vault change the owner can fix (bad slug, taken slug); the message is shown as-is. */
 export class VaultError extends Error {}
@@ -39,9 +34,8 @@ export interface VaultInstance extends VaultRow {
   sync?: SyncSupervisor;
 }
 
-/** Path of a vault's MCP endpoint; the default vault keeps its original /mcp. */
 export function mcpPath(vault: VaultRow): string {
-  return vault.id === DEFAULT_VAULT_ID ? "/mcp" : `/v/${vault.slug}/mcp`;
+  return `/v/${vault.slug}/mcp`;
 }
 
 export function listVaultRows(db: Database): VaultRow[] {
@@ -49,14 +43,10 @@ export function listVaultRows(db: Database): VaultRow[] {
 }
 
 /**
- * The default vault predates multi-vault support and keeps the configured
- * VAULT_DIR / SNAPSHOTS_DIR / OB_CONFIG_DIR, so existing data and the ob sync
- * link (recorded against the vault path) stay where they are. Every other
- * vault lives under DATA_DIR/vaults/<slug>/ with its own ob config, which also
- * gives it its own sync login and lockfile.
+ * Each vault lives under DATA_DIR/vaults/<slug>/ with its own ob config, which
+ * also gives it its own sync login and lockfile.
  */
 export function vaultConfig(config: Config, row: VaultRow): Config {
-  if (row.id === DEFAULT_VAULT_ID) return config;
   if (!SLUG_RE.test(row.slug)) throw new Error(`Invalid vault slug '${row.slug}'`);
   const root = join(config.dataDir, "vaults", row.slug);
   return {
@@ -85,8 +75,7 @@ async function openVault(config: Config, db: Database, row: VaultRow): Promise<V
     store,
     links: new LinkIndex(store),
     snapshotter,
-    // until renamed, the default vault keeps reporting its folder name as before
-    vaultName: row.id === DEFAULT_VAULT_ID && row.name === DEFAULT_VAULT_NAME ? basename(vc.vaultDir) : row.name,
+    vaultName: row.name,
     ownerGuidance: () => settings.get("vault_instructions"),
   });
 
@@ -103,7 +92,6 @@ export class VaultRegistry {
 
   constructor(instances: VaultInstance[]) {
     for (const v of instances) this.bySlug.set(v.slug, v);
-    if (!instances.some((v) => v.id === DEFAULT_VAULT_ID)) throw new Error("VaultRegistry requires the default vault");
   }
 
   /** Open every vault in the database: directories, snapshots, and sync supervision. */
@@ -157,7 +145,6 @@ export class VaultRegistry {
   async remove(db: Database, slug: string): Promise<VaultInstance> {
     const vault = this.bySlug.get(slug);
     if (!vault) throw new VaultError(`No vault '${slug}'.`);
-    if (vault.id === DEFAULT_VAULT_ID) throw new VaultError("The default vault can't be removed.");
     // unlisted first, so no new request resolves it while we shut it down
     this.bySlug.delete(slug);
     await vault.sync?.shutdown();
@@ -191,16 +178,13 @@ export class VaultRegistry {
     return vault;
   }
 
-  default(): VaultInstance {
-    return this.all().find((v) => v.id === DEFAULT_VAULT_ID)!;
-  }
-
   get(slug: string): VaultInstance | undefined {
     return this.bySlug.get(slug);
   }
 
+  /** In the order they were added. */
   all(): VaultInstance[] {
-    return [...this.bySlug.values()];
+    return [...this.bySlug.values()].sort((a, b) => a.id - b.id);
   }
 
   /** Stop sync first so ob can't write mid-commit, then take each final snapshot. */

@@ -56,9 +56,6 @@ export function deleteSetting(db: Database, key: string) {
   db.query("DELETE FROM settings WHERE key = ?").run(key);
 }
 
-/** The vault that predates multi-vault support; legacy /mcp and old credentials map to it. */
-export const DEFAULT_VAULT_ID = 1;
-
 /** Key/value settings owned by one vault (guidance, sync state). */
 export interface VaultSettings {
   get(key: string): string | null;
