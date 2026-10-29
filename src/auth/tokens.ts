@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Database } from "bun:sqlite";
+import { DEFAULT_VAULT_ID } from "../db/index.ts";
 
 const B32 = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -54,10 +55,10 @@ export interface ApiTokenRow {
   revoked_at: number | null;
 }
 
-export function createApiToken(db: Database, name: string): { token: string; row: ApiTokenRow } {
+export function createApiToken(db: Database, name: string, vaultId = DEFAULT_VAULT_ID): { token: string; row: ApiTokenRow } {
   const { token, hash, prefix } = mintToken("static");
   const id = randomBase32(8);
-  db.query("INSERT INTO api_tokens (id, name, token_prefix, token_hash) VALUES (?, ?, ?, ?)").run(id, name, prefix, hash);
+  db.query("INSERT INTO api_tokens (id, name, token_prefix, token_hash, vault_id) VALUES (?, ?, ?, ?, ?)").run(id, name, prefix, hash, vaultId);
   const row = db.query<ApiTokenRow, [string]>("SELECT id, name, token_prefix, created_at, last_used_at, revoked_at FROM api_tokens WHERE id = ?").get(id)!;
   return { token, row };
 }
@@ -76,12 +77,14 @@ export interface AuthPrincipal {
   kind: "static" | "oauth";
   id: string;
   name: string;
+  /** The only vault this credential may access. */
+  vaultId: number;
 }
 
 export function verifyApiToken(db: Database, token: string): AuthPrincipal | null {
   const row = db
-    .query<{ id: string; name: string; last_used_at: number | null }, [string]>(
-      "SELECT id, name, last_used_at FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL",
+    .query<{ id: string; name: string; vault_id: number; last_used_at: number | null }, [string]>(
+      "SELECT id, name, vault_id, last_used_at FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL",
     )
     .get(hashToken(token));
   if (!row) return null;
@@ -89,7 +92,7 @@ export function verifyApiToken(db: Database, token: string): AuthPrincipal | nul
   if (!row.last_used_at || now - row.last_used_at >= LAST_USED_THROTTLE_S) {
     db.query("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").run(now, row.id);
   }
-  return { kind: "static", id: row.id, name: row.name };
+  return { kind: "static", id: row.id, name: row.name, vaultId: row.vault_id };
 }
 
 export function revokeApiToken(db: Database, id: string): boolean {
@@ -108,8 +111,8 @@ export function revokeApiToken(db: Database, id: string): boolean {
 
 export function verifyOAuthAccessToken(db: Database, token: string): AuthPrincipal | null {
   const row = db
-    .query<{ id: string; client_id: string; client_name: string; access_expires_at: number; last_used_at: number | null }, [string]>(
-      `SELECT g.id, g.client_id, c.client_name, g.access_expires_at, g.last_used_at
+    .query<{ id: string; client_id: string; client_name: string; vault_id: number; access_expires_at: number; last_used_at: number | null }, [string]>(
+      `SELECT g.id, g.client_id, c.client_name, g.vault_id, g.access_expires_at, g.last_used_at
        FROM oauth_grants g JOIN oauth_clients c ON c.client_id = g.client_id
        WHERE g.access_token_hash = ? AND g.revoked_at IS NULL`,
     )
@@ -120,7 +123,7 @@ export function verifyOAuthAccessToken(db: Database, token: string): AuthPrincip
   if (!row.last_used_at || now - row.last_used_at >= LAST_USED_THROTTLE_S) {
     db.query("UPDATE oauth_grants SET last_used_at = ? WHERE id = ?").run(now, row.id);
   }
-  return { kind: "oauth", id: row.id, name: row.client_name };
+  return { kind: "oauth", id: row.id, name: row.client_name, vaultId: row.vault_id };
 }
 
 /** Dispatch on token prefix; unknown prefixes are tried against both tables. */

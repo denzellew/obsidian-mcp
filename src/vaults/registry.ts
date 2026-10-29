@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Config } from "../config.ts";
-import { vaultSettings, type VaultSettings } from "../db/index.ts";
+import { DEFAULT_VAULT_ID, vaultSettings, type VaultSettings } from "../db/index.ts";
 import { createVaultContext, type VaultContext } from "../mcp/context.ts";
 import { Snapshotter } from "../snapshots/snapshotter.ts";
 import { SyncSupervisor } from "../sync/supervisor.ts";
@@ -12,7 +12,7 @@ import { logger } from "../log.ts";
 
 const log = logger("vaults");
 
-export const DEFAULT_VAULT_ID = 1;
+export { DEFAULT_VAULT_ID };
 
 // Mirrors the CHECK in 0004_vaults.sql. Re-checked here because the slug is
 // joined into filesystem paths.

@@ -6,6 +6,7 @@ import { getSession, type SessionRow } from "./sessions.ts";
 import { verifyBearer, type AuthPrincipal } from "./tokens.ts";
 import { resolveOrigin, isLocalHost } from "../web/origin.ts";
 import { getSetting } from "../db/index.ts";
+import type { VaultInstance } from "../vaults/registry.ts";
 
 export const SESSION_COOKIE = "obmcp_sid";
 
@@ -15,6 +16,8 @@ export type AuthEnv = {
     sessionCookie?: string;
     principal?: AuthPrincipal;
     bearerToken?: string;
+    /** The vault an MCP request is addressed to (set before requireBearer). */
+    vault?: VaultInstance;
     /** Public origin for this request (configured or proxy-derived). */
     publicOrigin: string;
     /** WebAuthn rpID for this request. */
@@ -92,24 +95,38 @@ export function mcpOriginGuard(): MiddlewareHandler<AuthEnv> {
   };
 }
 
-export function wwwAuthenticate(origin: string, error?: string): string {
-  const meta = `${origin}/.well-known/oauth-protected-resource/mcp`;
+/** `mcpPath` is the MCP endpoint path (/mcp or /v/<slug>/mcp); each has its own resource metadata. */
+export function wwwAuthenticate(origin: string, mcpPath: string, error?: string): string {
+  const meta = `${origin}/.well-known/oauth-protected-resource${mcpPath}`;
   return `Bearer resource_metadata="${meta}"${error ? `, error="${error}"` : ""}`;
 }
 
-/** Bearer auth for /mcp: static obmcp_ tokens and OAuth obat_ tokens. */
+/**
+ * Bearer auth for MCP endpoints: static obmcp_ tokens and OAuth obat_ tokens,
+ * each valid only for the vault it was issued for (c.var.vault).
+ */
 export function requireBearer(db: Database): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
+    const vault = c.var.vault!;
+    const challenge = (error?: string) => c.header("WWW-Authenticate", wwwAuthenticate(c.var.publicOrigin, c.req.path, error));
     const header = c.req.header("authorization");
     const token = header?.match(/^Bearer\s+(.+)$/i)?.[1];
     if (!token) {
-      c.header("WWW-Authenticate", wwwAuthenticate(c.var.publicOrigin));
+      challenge();
       return c.json({ error: "unauthorized", error_description: "Missing bearer token" }, 401);
     }
     const principal = verifyBearer(db, token);
     if (!principal) {
-      c.header("WWW-Authenticate", wwwAuthenticate(c.var.publicOrigin, "invalid_token"));
+      challenge("invalid_token");
       return c.json({ error: "invalid_token", error_description: "Token is invalid, expired, or revoked" }, 401);
+    }
+    if (principal.vaultId !== vault.id) {
+      // 401 (not 403) so OAuth clients re-run discovery and authorize for this resource
+      challenge("invalid_token");
+      return c.json(
+        { error: "invalid_token", error_description: `Token was issued for a different vault; authorize for '${vault.slug}'` },
+        401,
+      );
     }
     c.set("principal", principal);
     c.set("bearerToken", token);

@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { serveStatic } from "hono/bun";
 import { csrf } from "hono/csrf";
 import { StreamableHTTPTransport } from "@hono/mcp";
@@ -64,15 +64,15 @@ export function createApp(deps: AppDeps) {
   app.use("/assets/*", serveStatic({ root: "./public", rewriteRequestPath: (p) => p.replace(/^\/assets/, "") }));
 
   // --- OAuth metadata + public endpoints ---
-  app.route("/.well-known", wellKnownRouter());
+  app.route("/.well-known", wellKnownRouter(deps.vaults));
   app.use("/oauth/token", rateLimit("oauth", 30));
   app.use("/oauth/register", rateLimit("oauth", 30));
-  app.route("/oauth", oauthPublicRouter(db));
+  app.route("/oauth", oauthPublicRouter(db, deps.vaults));
 
   // --- OAuth interactive (passkey session + consent) ---
   app.use("/oauth/authorize", requireSession(db, { redirect: true }));
   app.use("/oauth/consent", requireSession(db, { redirect: true }), sameOriginCsrf);
-  app.route("/oauth", oauthInteractiveRouter(db));
+  app.route("/oauth", oauthInteractiveRouter(db, deps.vaults));
 
   // --- Setup & login ---
   app.use("/setup/*", rateLimit("setup", 10));
@@ -82,12 +82,12 @@ export function createApp(deps: AppDeps) {
   app.use("/logout", sameOriginCsrf);
   app.route("/", loginRouter(db, config));
 
-  // --- MCP endpoint (bearer auth) ---
-  app.use("/mcp", mcpOriginGuard(), requireBearer(db));
-  app.all("/mcp", async (c) => {
+  // --- MCP endpoints (bearer auth, one per vault) ---
+  // /mcp is the default vault's original endpoint, kept so existing clients keep working.
+  const serveMcp = async (c: Context<AppEnv>) => {
     const transport = new StreamableHTTPTransport();
     const principal = c.var.principal!;
-    const server = createMcpServer(vault.ctx, {
+    const server = createMcpServer(c.var.vault!.ctx, {
       onToolCall: (tool, args, result) =>
         recordMcpCall(
           db,
@@ -104,7 +104,22 @@ export function createApp(deps: AppDeps) {
     const unregister = abortRegistry.register(hashToken(token), () => void transport.close());
     transport.onclose = unregister;
     return transport.handleRequest(c);
-  });
+  };
+  app.use("/mcp", (c, next) => (c.set("vault", vault), next()), mcpOriginGuard(), requireBearer(db));
+  app.all("/mcp", serveMcp);
+  app.use(
+    "/v/:slug/mcp",
+    async (c, next) => {
+      const slug = c.req.param("slug") ?? "";
+      const target = deps.vaults.get(slug);
+      if (!target) return c.json({ error: "not_found", error_description: `No vault '${slug}' on this server` }, 404);
+      c.set("vault", target);
+      return next();
+    },
+    mcpOriginGuard(),
+    requireBearer(db),
+  );
+  app.all("/v/:slug/mcp", serveMcp);
 
   // --- Management UI (session + CSRF) ---
   app.use("/app/*", requireSession(db, { redirect: true }), csrf({ origin: config.origin }));

@@ -87,10 +87,11 @@ function insert(
     target?: string | null;
     status?: "ok" | "error";
     detail?: string | null;
+    vaultId?: number | null;
   },
 ) {
   db.query(
-    "INSERT INTO audit_log (source, actor_kind, actor_name, event, action, target, status, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO audit_log (source, actor_kind, actor_name, event, action, target, status, detail, vault_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     e.source,
     e.actorKind,
@@ -100,6 +101,7 @@ function insert(
     e.target ?? null,
     e.status ?? "ok",
     e.detail ?? null,
+    e.vaultId ?? null,
   );
 }
 
@@ -151,7 +153,7 @@ export function recordMcpCall(
   detail?: string,
 ) {
   const { action, target } = summarize(tool, args);
-  insert(db, { source: "agent", actorKind: principal.kind, actorName: principal.name, event: tool, action, target, status, detail });
+  insert(db, { source: "agent", actorKind: principal.kind, actorName: principal.name, event: tool, action, target, status, detail, vaultId: principal.vaultId });
 }
 
 // --- Owner (security/config) actions ---------------------------------------
