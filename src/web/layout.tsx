@@ -82,6 +82,7 @@ function Nav(props: { active?: string; vault: ReturnType<typeof selectedVault> }
                 {v.name}
               </option>
             ))}
+            <option value="">Manage vaults…</option>
           </select>
         ) : null}
         <form method="post" action="/logout" class={props.vault ? "shrink-0" : "ml-auto shrink-0"}>

@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -21,10 +21,11 @@ let base: string;
 let def: VaultInstance;
 let personal: VaultInstance;
 let session: string;
+let config: ReturnType<typeof loadConfig>;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "obmcp-vault-ui-"));
-  const config = { ...loadConfig({ DATA_DIR: dir } as unknown as NodeJS.ProcessEnv), syncAutostart: false, obBin: "/nonexistent/ob" };
+  config = { ...loadConfig({ DATA_DIR: dir } as unknown as NodeJS.ProcessEnv), syncAutostart: false, obBin: "/nonexistent/ob" };
   db = openDatabase(":memory:");
   db.query("INSERT INTO vaults (slug, name) VALUES ('personal', 'Personal')").run();
   vaults = await VaultRegistry.boot(config, db);
@@ -187,5 +188,89 @@ describe("scoped pages", () => {
       headers: { Cookie: as("default"), Origin: base, "HX-Request": "true", "X-Vault": "default" },
     });
     expect(db.query("SELECT 1 FROM oauth_clients WHERE client_id = 'obcl_both'").get()).toBeNull();
+  });
+});
+
+describe("vault management", () => {
+  async function ping(path: string, token: string): Promise<number> {
+    const res = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+    });
+    await res.text();
+    return res.status;
+  }
+
+  test("the switcher's last option opens vault management without switching", async () => {
+    const res = await post("/app/vault", as("personal"), { vault: "" }, { "HX-Request": "true" });
+    expect(res.headers.get("hx-redirect")).toBe("/app/vaults");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    const html = await (await fetch(`${base}/app/vaults`, { headers: { Cookie: as("personal") } })).text();
+    expect(html).toContain(`${base}/v/personal/mcp`);
+    expect(html).toContain("default vault");
+  });
+
+  test("bad and taken slugs are refused", async () => {
+    const bad = await post("/app/vaults", as(), { name: "Work", slug: "-work" }, { "HX-Request": "true" });
+    expect(await bad.text()).toContain("Slug must be");
+    const taken = await post("/app/vaults", as(), { name: "Again", slug: "personal" }, { "HX-Request": "true" });
+    expect(await taken.text()).toContain("already exists");
+    expect(vaults.all().map((v) => v.slug)).toEqual(["default", "personal"]);
+  });
+
+  test("adding a vault serves it right away and switches to its sync setup", async () => {
+    const res = await post("/app/vaults", as(), { name: "Work", slug: "work" }, { "HX-Request": "true" });
+    expect(res.headers.get("hx-redirect")).toBe("/app/sync");
+    expect(res.headers.get("set-cookie")).toContain(`${VAULT_COOKIE}=work`);
+    const work = vaults.get("work")!;
+    expect(work.config.vaultDir).toBe(join(dir, "vaults", "work", "Vault"));
+    expect(existsSync(join(dir, "vaults", "work", "snapshots", "vault.git"))).toBe(true);
+    expect(work.sync!.desiredRunning()).toBe(false);
+
+    const token = createApiToken(db, "work-token", work.id).token;
+    expect(await ping("/v/work/mcp", token)).toBe(200);
+    const page = await (await fetch(`${base}/app/sync`, { headers: { Cookie: as("work") } })).text();
+    expect(page).toContain('<option value="work" selected="">Work</option>');
+  });
+
+  test("renaming updates the switcher and what MCP clients see", async () => {
+    const res = await post("/app/vaults/work/name", as("work"), { name: "Day Job" }, { "HX-Request": "true" });
+    expect(res.headers.get("hx-refresh")).toBe("true");
+    expect(vaults.get("work")!.ctx.vaultName).toBe("Day Job");
+    expect(db.query<{ name: string }, []>("SELECT name FROM vaults WHERE slug = 'work'").get()!.name).toBe("Day Job");
+  });
+
+  test("the default vault can't be removed", async () => {
+    const res = await fetch(`${base}/app/vaults/default`, { method: "DELETE", headers: { Cookie: as(), Origin: base, "HX-Request": "true" } });
+    expect(await res.text()).toContain("The default vault can");
+    expect(vaults.get("default")).toBeDefined();
+  });
+
+  test("removing a vault revokes its credentials but keeps its files", async () => {
+    const work = vaults.get("work")!;
+    const token = createApiToken(db, "work-token-2", work.id).token;
+    writeFileSync(join(work.config.vaultDir, "Kept.md"), "still here\n");
+    db.query("INSERT INTO oauth_clients (client_id, client_name, redirect_uris, consented_at) VALUES ('obcl_work', 'Work Only', '[]', unixepoch())").run();
+    db.query("INSERT INTO oauth_consents (client_id, vault_id) VALUES ('obcl_work', ?)").run(work.id);
+
+    const res = await fetch(`${base}/app/vaults/work`, { method: "DELETE", headers: { Cookie: as("work"), Origin: base, "HX-Request": "true" } });
+    expect(res.headers.get("hx-refresh")).toBe("true");
+    expect(vaults.get("work")).toBeUndefined();
+    expect(await ping("/v/work/mcp", token)).toBe(404);
+    expect(db.query("SELECT 1 FROM api_tokens WHERE vault_id = ?").get(work.id)).toBeNull();
+    expect(db.query("SELECT 1 FROM oauth_clients WHERE client_id = 'obcl_work'").get()).toBeNull();
+    expect(existsSync(join(work.config.vaultDir, "Kept.md"))).toBe(true);
+
+    // a stale switcher cookie falls back to the default vault
+    const html = await (await fetch(`${base}/app`, { headers: { Cookie: as("work") } })).text();
+    expect(html).toContain('<option value="default" selected="">Vault</option>');
+  });
+
+  test("re-adding a removed slug picks its files back up", async () => {
+    await post("/app/vaults", as(), { name: "Work", slug: "work" }, { "HX-Request": "true" });
+    const work = vaults.get("work")!;
+    expect((await work.ctx.store.readText("Kept.md")).text).toBe("still here\n");
+    expect(listApiTokens(db, work.id)).toEqual([]);
   });
 });

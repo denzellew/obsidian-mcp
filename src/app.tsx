@@ -28,6 +28,7 @@ import { syncRouter } from "./web/routes/sync.tsx";
 import { snapshotsRouter } from "./web/routes/snapshots.tsx";
 import { auditRouter } from "./web/routes/audit.tsx";
 import { guidanceRouter } from "./web/routes/guidance.tsx";
+import { vaultsRouter } from "./web/routes/vaults.tsx";
 import { selectVault, vaultSwitchRouter } from "./web/vault-context.tsx";
 import { recordMcpCall } from "./audit.ts";
 import type { VaultRegistry } from "./vaults/registry.ts";
@@ -129,6 +130,7 @@ export function createApp(deps: AppDeps) {
   app.use("/app/*", requireSession(db, { redirect: true }), sameOriginCsrf, selectVault(deps.vaults));
   app.use("/app", requireSession(db, { redirect: true }), selectVault(deps.vaults));
   app.route("/app/vault", vaultSwitchRouter(deps.vaults));
+  app.route("/app/vaults", vaultsRouter(db, config, deps.vaults));
   app.route("/app/tokens", tokensRouter(db));
   app.route("/app/passkeys", passkeysRouter(db, config));
   app.route("/app/connections", connectionsRouter(db));

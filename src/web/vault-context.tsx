@@ -10,9 +10,12 @@ export const VAULT_FIELD = "_vault";
 export const VAULT_HEADER = "X-Vault";
 
 // These act on the server as a whole, not on the selected vault.
-const GLOBAL_PATHS = ["/app/passkeys", "/app/vault"];
+const GLOBAL_PATHS = ["/app/passkeys", "/app/vault", "/app/vaults"];
 
-const SECTIONS = ["audit", "guidance", "tokens", "connections", "sync", "snapshots", "passkeys"];
+const SECTIONS = ["audit", "guidance", "tokens", "connections", "sync", "snapshots", "passkeys", "vaults"];
+
+/** The switcher's last option, which opens vault management instead of selecting a vault. */
+export const MANAGE_VAULTS = "";
 
 /**
  * Pick the vault the management UI is showing from the switcher cookie. The
@@ -74,21 +77,29 @@ function StaleTabPage(props: { shown: string; current: string; back: string }) {
   );
 }
 
+export function setVaultCookie(c: Context<AuthEnv>, slug: string): void {
+  setCookie(c, VAULT_COOKIE, slug, {
+    path: "/app",
+    httpOnly: true,
+    sameSite: "Lax",
+    secure: c.var.secureCookies,
+    maxAge: 365 * 24 * 3600,
+  });
+}
+
 export function vaultSwitchRouter(vaults: VaultRegistry): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
   app.post("/", async (c) => {
     const body = await c.req.parseBody();
-    const target = vaults.get(String(body.vault ?? ""));
-    if (!target) return c.text("Unknown vault", 400);
-    setCookie(c, VAULT_COOKIE, target.slug, {
-      path: "/app",
-      httpOnly: true,
-      sameSite: "Lax",
-      secure: c.var.secureCookies,
-      maxAge: 365 * 24 * 3600,
-    });
-    const dest = sectionPath(c.req.header("HX-Current-URL") ?? c.req.header("referer"));
+    const picked = String(body.vault ?? "");
+    let dest = "/app/vaults";
+    if (picked !== MANAGE_VAULTS) {
+      const target = vaults.get(picked);
+      if (!target) return c.text("Unknown vault", 400);
+      setVaultCookie(c, target.slug);
+      dest = sectionPath(c.req.header("HX-Current-URL") ?? c.req.header("referer"));
+    }
     if (c.req.header("HX-Request")) {
       c.header("HX-Redirect", dest);
       return c.body(null);

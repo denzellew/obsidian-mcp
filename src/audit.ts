@@ -34,7 +34,7 @@ const READ_TOOLS = new Set(["vault_info", "browse_vault", "search_vault", "read_
 
 /** Which source bucket an owner ("admin") event belongs to. */
 function adminSourceFor(event: string): AuditSource {
-  if (event.startsWith("sync.") || event === "guidance.update" || event === "snapshot.restore") return "config";
+  if (event.startsWith("sync.") || event.startsWith("vault.") || event === "guidance.update" || event === "snapshot.restore") return "config";
   return "security";
 }
 
@@ -58,10 +58,12 @@ export function categorize(source: AuditSource, event: string, action: string | 
       return "session";
     case "passkey.add":
     case "token.create":
+    case "vault.create":
       return "create";
     case "passkey.delete":
     case "token.revoke":
     case "oauth.revoke":
+    case "vault.remove":
       return "delete";
     case "oauth.consent":
     case "setup.complete":
