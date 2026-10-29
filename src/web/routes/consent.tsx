@@ -1,7 +1,7 @@
 import { Layout } from "../layout.tsx";
 import type { ClientRow } from "../../oauth/router.ts";
 
-export function ConsentPage(props: { client: ClientRow; params: Record<string, string> }) {
+export function ConsentPage(props: { client: ClientRow; vaultName: string; params: Record<string, string> }) {
   const redirectHost = (() => {
     try {
       return new URL(props.params.redirect_uri ?? "").host;
@@ -18,11 +18,12 @@ export function ConsentPage(props: { client: ClientRow; params: Record<string, s
         </div>
         <p class="mb-2">
           <span class="font-semibold text-accent-hover">{props.client.client_name}</span> wants full access to your
-          Obsidian vault via MCP (read, create, edit, and delete notes).
+          Obsidian vault <span class="font-semibold text-text">{props.vaultName}</span> via MCP (read, create, edit, and
+          delete notes).
         </p>
         <p class="mb-6 text-sm text-text-muted">
           After approval you will be sent to <span class="font-mono">{redirectHost}</span>. Approving remembers this
-          client; revoke it anytime under Connections.
+          client for this vault only; revoke it anytime under Connections.
         </p>
         <form method="post" action="/oauth/consent" class="flex gap-3">
           {Object.entries(props.params).map(([k, v]) => (

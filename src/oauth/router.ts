@@ -7,6 +7,7 @@ import { isRegistrableRedirectUri, pkceChallengeFromVerifier, redirectUriMatches
 import { ConsentPage, OAuthErrorPage } from "../web/routes/consent.tsx";
 import { recordAdmin } from "../audit.ts";
 import { logger } from "../log.ts";
+import type { VaultInstance, VaultRegistry } from "../vaults/registry.ts";
 
 const log = logger("oauth");
 
@@ -29,21 +30,33 @@ function getClient(db: Database, clientId: string): ClientRow | null {
   return db.query<ClientRow, [string]>("SELECT * FROM oauth_clients WHERE client_id = ?").get(clientId);
 }
 
-function canonicalResource(origin: string): string {
-  return `${origin}/mcp`;
+/**
+ * Map an RFC 8707 resource indicator to the vault it names. /mcp is the
+ * default vault's legacy endpoint; an absent indicator also means the default
+ * vault, for clients that predate resource indicators.
+ */
+export function vaultForResource(vaults: VaultRegistry, origin: string, resource: string | undefined): VaultInstance | null {
+  if (!resource || resource === `${origin}/mcp`) return vaults.default();
+  const prefix = `${origin}/v/`;
+  if (!resource.startsWith(prefix) || !resource.endsWith("/mcp")) return null;
+  return vaults.get(resource.slice(prefix.length, -"/mcp".length)) ?? null;
+}
+
+function hasConsent(db: Database, clientId: string, vaultId: number): boolean {
+  return !!db.query("SELECT 1 FROM oauth_consents WHERE client_id = ? AND vault_id = ?").get(clientId, vaultId);
 }
 
 // ---------------------------------------------------------------------------
 // Metadata (mounted at /.well-known)
 
-export function wellKnownRouter(): Hono<AuthEnv> {
+export function wellKnownRouter(vaults: VaultRegistry): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
-  const prm = (origin: string) => ({
-    resource: `${origin}/mcp`,
+  const prm = (origin: string, mcpPath: string, name: string) => ({
+    resource: `${origin}${mcpPath}`,
     authorization_servers: [origin],
     bearer_methods_supported: ["header"],
     scopes_supported: ["mcp"],
-    resource_name: "Obsidian MCP",
+    resource_name: name,
   });
   const asMeta = (origin: string) => ({
     issuer: origin,
@@ -58,8 +71,14 @@ export function wellKnownRouter(): Hono<AuthEnv> {
     scopes_supported: ["mcp"],
   });
   const cache = (c: { header: (k: string, v: string) => void }) => c.header("Cache-Control", "public, max-age=3600");
-  app.get("/oauth-protected-resource", (c) => (cache(c), c.json(prm(c.var.publicOrigin))));
-  app.get("/oauth-protected-resource/mcp", (c) => (cache(c), c.json(prm(c.var.publicOrigin))));
+  app.get("/oauth-protected-resource", (c) => (cache(c), c.json(prm(c.var.publicOrigin, "/mcp", "Obsidian MCP"))));
+  app.get("/oauth-protected-resource/mcp", (c) => (cache(c), c.json(prm(c.var.publicOrigin, "/mcp", "Obsidian MCP"))));
+  app.get("/oauth-protected-resource/v/:slug/mcp", (c) => {
+    const vault = vaults.get(c.req.param("slug"));
+    if (!vault) return c.json({ error: "not_found", error_description: "No such vault" }, 404);
+    cache(c);
+    return c.json(prm(c.var.publicOrigin, `/v/${vault.slug}/mcp`, `Obsidian MCP · ${vault.name}`));
+  });
   app.get("/oauth-authorization-server", (c) => (cache(c), c.json(asMeta(c.var.publicOrigin))));
   return app;
 }
@@ -67,8 +86,11 @@ export function wellKnownRouter(): Hono<AuthEnv> {
 // ---------------------------------------------------------------------------
 // Public endpoints: register / token / revoke
 
-export function oauthPublicRouter(db: Database): Hono {
-  const app = new Hono();
+export function oauthPublicRouter(db: Database, vaults: VaultRegistry): Hono<AuthEnv> {
+  const app = new Hono<AuthEnv>();
+  // RFC 8707: a resource sent to the token endpoint must name the vault the grant is bound to
+  const resourceMismatch = (origin: string, resource: unknown, vaultId: number) =>
+    typeof resource === "string" && resource !== "" && vaultForResource(vaults, origin, resource)?.id !== vaultId;
 
   // RFC 7591 Dynamic Client Registration
   app.post("/register", async (c) => {
@@ -144,7 +166,7 @@ export function oauthPublicRouter(db: Database): Hono {
       }
       const row = db
         .query<
-          { code_hash: string; client_id: string; redirect_uri: string; code_challenge: string; resource: string | null; expires_at: number; used_at: number | null },
+          { code_hash: string; client_id: string; redirect_uri: string; code_challenge: string; resource: string | null; vault_id: number; expires_at: number; used_at: number | null },
           [string]
         >("SELECT * FROM oauth_authorization_codes WHERE code_hash = ?")
         .get(hashToken(code));
@@ -163,14 +185,17 @@ export function oauthPublicRouter(db: Database): Hono {
       if (pkceChallengeFromVerifier(verifier) !== row.code_challenge) {
         return c.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
       }
+      if (resourceMismatch(c.var.publicOrigin, body.resource, row.vault_id)) {
+        return c.json({ error: "invalid_target", error_description: "resource does not match the one this code was issued for" }, 400);
+      }
       db.query("UPDATE oauth_authorization_codes SET used_at = unixepoch() WHERE code_hash = ?").run(row.code_hash);
 
       const access = mintToken("access");
       const refresh = mintToken("refresh");
       const now = Math.floor(Date.now() / 1000);
       db.query(
-        "INSERT INTO oauth_grants (id, client_id, access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ).run(randomBytes(12).toString("base64url"), clientId, access.hash, now + ACCESS_TTL_S, refresh.hash, now + REFRESH_TTL_S);
+        "INSERT INTO oauth_grants (id, client_id, vault_id, access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(randomBytes(12).toString("base64url"), clientId, row.vault_id, access.hash, now + ACCESS_TTL_S, refresh.hash, now + REFRESH_TTL_S);
       return c.json({
         access_token: access.token,
         token_type: "Bearer",
@@ -187,20 +212,20 @@ export function oauthPublicRouter(db: Database): Hono {
       const now = Math.floor(Date.now() / 1000);
 
       let grant = db
-        .query<{ id: string; refresh_expires_at: number; revoked_at: number | null }, [string]>(
-          "SELECT id, refresh_expires_at, revoked_at FROM oauth_grants WHERE refresh_token_hash = ?",
+        .query<{ id: string; vault_id: number; refresh_expires_at: number; revoked_at: number | null }, [string]>(
+          "SELECT id, vault_id, refresh_expires_at, revoked_at FROM oauth_grants WHERE refresh_token_hash = ?",
         )
         .get(h);
 
       if (!grant) {
         // previous-refresh-token window: a client retrying a rotation it never received
         const prev = db
-          .query<{ id: string; prev_rotated_at: number | null; revoked_at: number | null }, [string]>(
-            "SELECT id, prev_rotated_at, revoked_at FROM oauth_grants WHERE prev_refresh_hash = ?",
+          .query<{ id: string; vault_id: number; prev_rotated_at: number | null; revoked_at: number | null }, [string]>(
+            "SELECT id, vault_id, prev_rotated_at, revoked_at FROM oauth_grants WHERE prev_refresh_hash = ?",
           )
           .get(h);
         if (prev && !prev.revoked_at && prev.prev_rotated_at && now - prev.prev_rotated_at <= REFRESH_REUSE_GRACE_S) {
-          grant = { id: prev.id, refresh_expires_at: now + 1, revoked_at: null };
+          grant = { id: prev.id, vault_id: prev.vault_id, refresh_expires_at: now + 1, revoked_at: null };
         } else if (prev) {
           // reuse outside the grace window → token theft signal → kill the grant
           db.query("UPDATE oauth_grants SET revoked_at = unixepoch() WHERE id = ?").run(prev.id);
@@ -212,6 +237,9 @@ export function oauthPublicRouter(db: Database): Hono {
       }
       if (grant.revoked_at) return c.json({ error: "invalid_grant", error_description: "Grant revoked" }, 400);
       if (grant.refresh_expires_at < now) return c.json({ error: "invalid_grant", error_description: "Refresh token expired; re-authorize" }, 400);
+      if (resourceMismatch(c.var.publicOrigin, body.resource, grant.vault_id)) {
+        return c.json({ error: "invalid_target", error_description: "resource does not match the vault this grant is for; authorize for it separately" }, 400);
+      }
 
       const access = mintToken("access");
       const refresh = mintToken("refresh");
@@ -265,10 +293,12 @@ interface AuthorizeParams {
   state?: string;
   code_challenge: string;
   resource?: string;
+  vault: VaultInstance;
 }
 
 function validateAuthorizeRequest(
   db: Database,
+  vaults: VaultRegistry,
   origin: string,
   q: Record<string, string | undefined>,
 ): { ok: true; client: ClientRow; params: AuthorizeParams } | { ok: false; fatal: string } | { ok: false; redirect: string } {
@@ -294,9 +324,8 @@ function validateAuthorizeRequest(
   if (q.response_type !== "code") return err("unsupported_response_type", "Only response_type=code is supported");
   if (!q.code_challenge) return err("invalid_request", "PKCE code_challenge is required");
   if ((q.code_challenge_method ?? "") !== "S256") return err("invalid_request", "code_challenge_method must be S256");
-  if (q.resource && q.resource !== canonicalResource(origin)) {
-    return err("invalid_target", `resource must be ${canonicalResource(origin)}`);
-  }
+  const vault = vaultForResource(vaults, origin, q.resource);
+  if (!vault) return err("invalid_target", `resource must be ${origin}/mcp or ${origin}/v/<vault>/mcp for an existing vault`);
   return {
     ok: true,
     client,
@@ -306,6 +335,7 @@ function validateAuthorizeRequest(
       state: q.state,
       code_challenge: q.code_challenge,
       resource: q.resource,
+      vault,
     },
   };
 }
@@ -313,28 +343,36 @@ function validateAuthorizeRequest(
 function issueCodeAndRedirect(db: Database, params: AuthorizeParams): string {
   const code = mintToken("code");
   db.query(
-    "INSERT INTO oauth_authorization_codes (code_hash, client_id, redirect_uri, code_challenge, resource, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(code.hash, params.client_id, params.redirect_uri, params.code_challenge, params.resource ?? null, Math.floor(Date.now() / 1000) + CODE_TTL_S);
+    "INSERT INTO oauth_authorization_codes (code_hash, client_id, vault_id, redirect_uri, code_challenge, resource, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    code.hash,
+    params.client_id,
+    params.vault.id,
+    params.redirect_uri,
+    params.code_challenge,
+    params.resource ?? null,
+    Math.floor(Date.now() / 1000) + CODE_TTL_S,
+  );
   const u = new URL(params.redirect_uri);
   u.searchParams.set("code", code.token);
   if (params.state) u.searchParams.set("state", params.state);
   return u.toString();
 }
 
-export function oauthInteractiveRouter(db: Database): Hono<AuthEnv> {
+export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
   app.get("/authorize", (c) => {
     const q = Object.fromEntries(new URL(c.req.url).searchParams) as Record<string, string>;
-    const v = validateAuthorizeRequest(db, c.var.publicOrigin, q);
+    const v = validateAuthorizeRequest(db, vaults, c.var.publicOrigin, q);
     if (!v.ok) {
       if ("redirect" in v) return c.redirect(v.redirect);
       return c.html(OAuthErrorPage({ message: v.fatal }), 400);
     }
-    if (v.client.consented_at) {
+    if (hasConsent(db, v.params.client_id, v.params.vault.id)) {
       return c.redirect(issueCodeAndRedirect(db, v.params));
     }
-    return c.html(ConsentPage({ client: v.client, params: q }));
+    return c.html(ConsentPage({ client: v.client, vaultName: v.params.vault.name, params: q }));
   });
 
   app.post("/consent", async (c) => {
@@ -343,7 +381,7 @@ export function oauthInteractiveRouter(db: Database): Hono<AuthEnv> {
     for (const k of ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "response_type", "resource", "scope"]) {
       if (typeof body[k] === "string" && body[k]) q[k] = body[k] as string;
     }
-    const v = validateAuthorizeRequest(db, c.var.publicOrigin, q);
+    const v = validateAuthorizeRequest(db, vaults, c.var.publicOrigin, q);
     if (!v.ok) {
       if ("redirect" in v) return c.redirect(v.redirect);
       return c.html(OAuthErrorPage({ message: v.fatal }), 400);
@@ -356,7 +394,8 @@ export function oauthInteractiveRouter(db: Database): Hono<AuthEnv> {
       return c.redirect(u.toString());
     }
     db.query("UPDATE oauth_clients SET consented_at = unixepoch() WHERE client_id = ?").run(v.params.client_id);
-    recordAdmin(db, "oauth.consent", { target: v.client.client_name });
+    db.query("INSERT OR REPLACE INTO oauth_consents (client_id, vault_id) VALUES (?, ?)").run(v.params.client_id, v.params.vault.id);
+    recordAdmin(db, "oauth.consent", { target: v.client.client_name, vaultId: v.params.vault.id });
     return c.redirect(issueCodeAndRedirect(db, v.params));
   });
 
@@ -370,24 +409,39 @@ export interface ConnectionRow extends ClientRow {
   grants: { id: string; created_at: number; last_used_at: number | null; access_expires_at: number }[];
 }
 
-export function listConnections(db: Database): ConnectionRow[] {
-  const clients = db.query<ClientRow, []>("SELECT * FROM oauth_clients WHERE consented_at IS NOT NULL ORDER BY consented_at DESC").all();
+/** Clients approved for one vault, with their live grants for it. */
+export function listConnections(db: Database, vaultId: number): ConnectionRow[] {
+  const clients = db
+    .query<ClientRow, [number]>(
+      `SELECT c.client_id, c.client_name, c.redirect_uris, c.logo_uri, c.created_at, k.consented_at
+       FROM oauth_clients c JOIN oauth_consents k ON k.client_id = c.client_id
+       WHERE k.vault_id = ? ORDER BY k.consented_at DESC`,
+    )
+    .all(vaultId);
   return clients.map((client) => ({
     ...client,
     grants: db
-      .query<{ id: string; created_at: number; last_used_at: number | null; access_expires_at: number }, [string]>(
-        "SELECT id, created_at, last_used_at, access_expires_at FROM oauth_grants WHERE client_id = ? AND revoked_at IS NULL ORDER BY created_at DESC",
+      .query<{ id: string; created_at: number; last_used_at: number | null; access_expires_at: number }, [string, number]>(
+        "SELECT id, created_at, last_used_at, access_expires_at FROM oauth_grants WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL ORDER BY created_at DESC",
       )
-      .all(client.client_id),
+      .all(client.client_id, vaultId),
   }));
 }
 
-export function revokeClient(db: Database, clientId: string) {
+/** Revoke a client's access to one vault. The registration itself goes once no vault is left approved. */
+export function revokeClient(db: Database, clientId: string, vaultId: number) {
   const grants = db
-    .query<{ access_token_hash: string }, [string]>(
-      "SELECT access_token_hash FROM oauth_grants WHERE client_id = ? AND revoked_at IS NULL",
+    .query<{ access_token_hash: string }, [string, number]>(
+      "SELECT access_token_hash FROM oauth_grants WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL",
     )
-    .all(clientId);
-  db.query("DELETE FROM oauth_clients WHERE client_id = ?").run(clientId); // cascades grants
+    .all(clientId, vaultId);
+  db.transaction(() => {
+    db.query("DELETE FROM oauth_grants WHERE client_id = ? AND vault_id = ?").run(clientId, vaultId);
+    db.query("DELETE FROM oauth_consents WHERE client_id = ? AND vault_id = ?").run(clientId, vaultId);
+    db.query("DELETE FROM oauth_clients WHERE client_id = ? AND NOT EXISTS (SELECT 1 FROM oauth_consents WHERE client_id = ?)").run(
+      clientId,
+      clientId,
+    );
+  })();
   for (const g of grants) abortRegistry.abort(g.access_token_hash);
 }

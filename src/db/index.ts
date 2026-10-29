@@ -55,3 +55,29 @@ export function setSetting(db: Database, key: string, value: string) {
 export function deleteSetting(db: Database, key: string) {
   db.query("DELETE FROM settings WHERE key = ?").run(key);
 }
+
+/** The vault that predates multi-vault support; legacy /mcp and old credentials map to it. */
+export const DEFAULT_VAULT_ID = 1;
+
+/** Key/value settings owned by one vault (guidance, sync state). */
+export interface VaultSettings {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  delete(key: string): void;
+}
+
+export function vaultSettings(db: Database, vaultId: number): VaultSettings {
+  return {
+    get: (key) =>
+      db
+        .query<{ value: string }, [number, string]>("SELECT value FROM vault_settings WHERE vault_id = ? AND key = ?")
+        .get(vaultId, key)?.value ?? null,
+    set: (key, value) =>
+      void db
+        .query(
+          "INSERT INTO vault_settings (vault_id, key, value) VALUES (?, ?, ?) ON CONFLICT(vault_id, key) DO UPDATE SET value = excluded.value",
+        )
+        .run(vaultId, key, value),
+    delete: (key) => void db.query("DELETE FROM vault_settings WHERE vault_id = ? AND key = ?").run(vaultId, key),
+  };
+}

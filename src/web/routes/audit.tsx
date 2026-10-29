@@ -118,7 +118,7 @@ export function auditRouter(db: Database): Hono<AuthEnv> {
 
   app.get("/", (c) => {
     const tab = c.req.query("tab") ?? "all";
-    const entries = listAudit(db, { limit: 100, source: sourceForTab(tab) });
+    const entries = listAudit(db, { limit: 100, source: sourceForTab(tab), vaultId: c.var.vault!.id });
     return c.html(
       <Layout title="Activity" activeNav="/app/audit">
         <div class="space-y-6">
@@ -138,7 +138,7 @@ export function auditRouter(db: Database): Hono<AuthEnv> {
           <p class="text-sm text-text-muted">
             Every action against this server — <span class="text-accent-hover">agent</span> tool calls over MCP,{" "}
             <span class="text-danger">security</span> changes (logins, passkeys, tokens, connections), and{" "}
-            <span class="text-warning">config</span> changes (sync, guidance, restores).
+            <span class="text-warning">config</span> changes (sync, guidance, restores, vaults).
           </p>
           <Card>
             <AuditTable entries={entries} tab={tab} />
@@ -151,7 +151,7 @@ export function auditRouter(db: Database): Hono<AuthEnv> {
   app.get("/more", (c) => {
     const tab = c.req.query("tab") ?? "all";
     const beforeId = Number.parseInt(c.req.query("beforeId") ?? "", 10) || undefined;
-    const entries = listAudit(db, { limit: 100, beforeId, source: sourceForTab(tab) });
+    const entries = listAudit(db, { limit: 100, beforeId, source: sourceForTab(tab), vaultId: c.var.vault!.id });
     return c.html(<AuditTable entries={entries} tab={tab} />);
   });
 

@@ -1,28 +1,30 @@
-# PUBLIC_URL stays unset so each service derives its origin from the hostname
-# Cloudflare forwarded. The two data directories must never be shared.
-# Both services run the same image; MCP_PROFILE selects the personal API.
+# One portal serving every vault, run locally — builds from this checkout, no
+# tunnel. Each vault is at /v/<slug>/mcp (the first one also at /mcp); add
+# vaults from the switcher's "Manage vaults…" in the UI.
+#
+# From the repo root:
+#   docker compose -f deploy/docker-compose.local.yml up -d --build
+#   docker compose -f deploy/docker-compose.local.yml logs app   ← setup token
+# then open http://localhost:3000/setup (APP_PORT=3100 to use another port).
+#
+# Passkeys work on http://localhost (browser secure-context exception). With no
+# PUBLIC_URL set, the app derives its origin from the request.
+# Data persists in deploy/data/app (gitignored); vaults beyond the first live
+# under deploy/data/app/vaults/<slug>/.
 
-x-mcp: &mcp
-  build:
-    context: ..
-    dockerfile: Dockerfile
-  image: obsidian-mcp:local
-  restart: unless-stopped
-  stop_grace_period: 30s
+# Named explicitly: compose otherwise names the project after this folder
+# ("deploy"), so another checkout's deploy/ would replace these containers.
+name: obsidian-mcp-app
 
 services:
-  knowledge-vault:
-    <<: *mcp
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: obsidian-mcp:app
+    restart: unless-stopped
+    stop_grace_period: 30s
     ports:
-      - "3000:3000"
+      - "${APP_PORT:-3000}:3000"
     volumes:
-      - ./data/knowledge:/data
-
-  personal-context:
-    <<: *mcp
-    ports:
-      - "3001:3000"
-    environment:
-      MCP_PROFILE: personal-context
-    volumes:
-      - ./data/personal:/data
+      - ./data/app:/data

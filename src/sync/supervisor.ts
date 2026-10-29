@@ -1,6 +1,5 @@
-import type { Database } from "bun:sqlite";
 import type { Config } from "../config.ts";
-import { getSetting, setSetting } from "../db/index.ts";
+import type { VaultSettings } from "../db/index.ts";
 import { obEnv } from "./ob.ts";
 import { clearLock, reapStrayOb, writeLock } from "./lock.ts";
 import { logger } from "../log.ts";
@@ -55,7 +54,7 @@ export class SyncSupervisor {
 
   constructor(
     private config: Config,
-    private db: Database,
+    private settings: VaultSettings,
     watchdog: SyncWatchdogOptions = {},
   ) {
     this.uploadStallMs = watchdog.uploadStallMs ?? UPLOAD_STALL_MS;
@@ -78,11 +77,11 @@ export class SyncSupervisor {
   }
 
   desiredRunning(): boolean {
-    return getSetting(this.db, "sync_desired") === "1";
+    return this.settings.get("sync_desired") === "1";
   }
 
   private setDesired(running: boolean) {
-    setSetting(this.db, "sync_desired", running ? "1" : "0");
+    this.settings.set("sync_desired", running ? "1" : "0");
   }
 
   /** Called on boot: start if the user previously enabled sync. */

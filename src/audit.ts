@@ -34,7 +34,7 @@ const READ_TOOLS = new Set(["vault_info", "browse_vault", "search_vault", "read_
 
 /** Which source bucket an owner ("admin") event belongs to. */
 function adminSourceFor(event: string): AuditSource {
-  if (event.startsWith("sync.") || event === "guidance.update" || event === "snapshot.restore") return "config";
+  if (event.startsWith("sync.") || event.startsWith("vault.") || event === "guidance.update" || event === "snapshot.restore") return "config";
   return "security";
 }
 
@@ -58,10 +58,12 @@ export function categorize(source: AuditSource, event: string, action: string | 
       return "session";
     case "passkey.add":
     case "token.create":
+    case "vault.create":
       return "create";
     case "passkey.delete":
     case "token.revoke":
     case "oauth.revoke":
+    case "vault.remove":
       return "delete";
     case "oauth.consent":
     case "setup.complete":
@@ -87,10 +89,11 @@ function insert(
     target?: string | null;
     status?: "ok" | "error";
     detail?: string | null;
+    vaultId?: number | null;
   },
 ) {
   db.query(
-    "INSERT INTO audit_log (source, actor_kind, actor_name, event, action, target, status, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO audit_log (source, actor_kind, actor_name, event, action, target, status, detail, vault_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     e.source,
     e.actorKind,
@@ -100,6 +103,7 @@ function insert(
     e.target ?? null,
     e.status ?? "ok",
     e.detail ?? null,
+    e.vaultId ?? null,
   );
 }
 
@@ -151,7 +155,7 @@ export function recordMcpCall(
   detail?: string,
 ) {
   const { action, target } = summarize(tool, args);
-  insert(db, { source: "agent", actorKind: principal.kind, actorName: principal.name, event: tool, action, target, status, detail });
+  insert(db, { source: "agent", actorKind: principal.kind, actorName: principal.name, event: tool, action, target, status, detail, vaultId: principal.vaultId });
 }
 
 // --- Owner (security/config) actions ---------------------------------------
@@ -160,7 +164,7 @@ export function recordMcpCall(
 export function recordAdmin(
   db: Database,
   event: string,
-  opts: { target?: string | null; status?: "ok" | "error"; detail?: string | null; actorName?: string } = {},
+  opts: { target?: string | null; status?: "ok" | "error"; detail?: string | null; actorName?: string; vaultId?: number } = {},
 ) {
   insert(db, {
     source: adminSourceFor(event),
@@ -171,6 +175,7 @@ export function recordAdmin(
     target: opts.target ?? null,
     status: opts.status ?? "ok",
     detail: opts.detail ?? null,
+    vaultId: opts.vaultId,
   });
 }
 
@@ -180,6 +185,8 @@ export interface AuditQuery {
   limit?: number;
   beforeId?: number;
   source?: AuditSource;
+  /** Events for this vault plus server-wide ones (logins, passkeys). */
+  vaultId?: number;
 }
 
 export function listAudit(db: Database, q: AuditQuery = {}): AuditEntry[] {
@@ -193,6 +200,10 @@ export function listAudit(db: Database, q: AuditQuery = {}): AuditEntry[] {
   if (q.source) {
     where.push("source = ?");
     params.push(q.source);
+  }
+  if (q.vaultId !== undefined) {
+    where.push("(vault_id = ? OR vault_id IS NULL)");
+    params.push(q.vaultId);
   }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   params.push(limit);

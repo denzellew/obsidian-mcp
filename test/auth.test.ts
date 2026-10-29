@@ -14,7 +14,7 @@ import { createApiToken, listApiTokens, revokeApiToken, verifyBearer, mintToken,
 import { createSession, getSession, deleteSession, sweepExpired } from "../src/auth/sessions.ts";
 import { resetRateLimits, SESSION_COOKIE } from "../src/auth/middleware.ts";
 import { redirectUriMatches, isRegistrableRedirectUri } from "../src/oauth/policy.ts";
-import { tmpVault, type TmpVault } from "./helpers.ts";
+import { tmpVault, type TmpVault, singleVault } from "./helpers.ts";
 import type { Database } from "bun:sqlite";
 
 let vault: TmpVault;
@@ -32,7 +32,7 @@ beforeAll(async () => {
   await snapshotter.init();
   const vaultCtx = createVaultContext({ store, links: new LinkIndex(store), snapshotter });
   const config = loadConfig({ DATA_DIR: vault.dir, PUBLIC_URL: "http://localhost:3000" } as unknown as NodeJS.ProcessEnv);
-  const app = createApp({ config, db, vaultCtx, setupState: { token: "setup_testtoken", pendingUserHandle: null } });
+  const app = createApp({ config, db, vaults: singleVault(config, db, vaultCtx), setupState: { token: "setup_testtoken", pendingUserHandle: null } });
   server = Bun.serve({ port: 0, fetch: app.fetch });
   base = `http://localhost:${server.port}`;
 });

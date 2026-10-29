@@ -1,10 +1,7 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { Database } from "bun:sqlite";
-import type { Config } from "../../config.ts";
-import { Layout, Card } from "../layout.tsx";
+import { Layout, Card, VaultField } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
-import type { SyncSupervisor } from "../../sync/supervisor.ts";
-import { getSetting, setSetting, deleteSetting } from "../../db/index.ts";
 import { obInstalled, obListRemoteVaults, obLogin, obLogout, obSyncConfig, obSyncSetup, obSyncUnlink } from "../../sync/ob.ts";
 import { recordAdmin } from "../../audit.ts";
 
@@ -35,16 +32,19 @@ function Controls(props: { state: string; desired: boolean }) {
     <div id="sync-controls" class="flex items-center gap-3">
       <StateBadge state={props.state} />
       <form method="post" action="/app/sync/start">
+        <VaultField />
         <button class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-hover" type="submit">
           Start
         </button>
       </form>
       <form method="post" action="/app/sync/stop">
+        <VaultField />
         <button class="rounded-md border border-base-600 px-3 py-1.5 text-sm text-text-muted hover:text-text" type="submit">
           Stop
         </button>
       </form>
       <form method="post" action="/app/sync/restart">
+        <VaultField />
         <button class="rounded-md border border-base-600 px-3 py-1.5 text-sm text-text-muted hover:text-text" type="submit">
           Restart
         </button>
@@ -103,12 +103,22 @@ function WizardPickVault(props: { vaultListing: string; error?: string }) {
   );
 }
 
-export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): Hono<AuthEnv> {
+/** The selected vault's sync pieces; each vault has its own ob config, login, and daemon. */
+function scope(c: Context<AuthEnv>) {
+  const { id: vaultId, config, settings, sync } = c.var.vault!;
+  return { vaultId, config, settings, sync: sync! };
+}
+
+export function syncRouter(db: Database): Hono<AuthEnv> {
   const app = new Hono<AuthEnv>();
 
-  const isConfigured = () => getSetting(db, "sync_configured") === "1";
+  app.use("*", async (c, next) => {
+    if (!c.var.vault!.sync) return c.notFound();
+    await next();
+  });
 
   app.get("/", (c) => {
+    const { config, settings, sync } = scope(c);
     const status = sync.status();
     const installed = obInstalled(config);
     return c.html(
@@ -124,7 +134,7 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
               </p>
             </Card>
           ) : null}
-          {isConfigured() ? (
+          {settings.get("sync_configured") === "1" ? (
             <>
               <Card title="Daemon">
                 <Controls state={status.state} desired={status.desired} />
@@ -135,6 +145,7 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
               </Card>
               <Card title="Danger zone">
                 <form method="post" action="/app/sync/unlink">
+                  <VaultField />
                   <button
                     type="submit"
                     class="rounded-md border border-danger/50 px-4 py-2 text-sm text-danger hover:bg-danger/10"
@@ -155,9 +166,10 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
     );
   });
 
-  app.get("/log", (c) => c.html(<LogPanel lines={sync.recentLog()} />));
+  app.get("/log", (c) => c.html(<LogPanel lines={scope(c).sync.recentLog()} />));
 
   app.post("/login", async (c) => {
+    const { config, vaultId } = scope(c);
     const body = await c.req.parseBody();
     const email = String(body.email ?? "").trim();
     const password = String(body.password ?? "");
@@ -165,10 +177,10 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
     if (!email || !password) return c.html(<WizardLogin error="Email and password are required." />);
     const result = await obLogin(config, email, password, mfa);
     if (!result.ok) {
-      recordAdmin(db, "sync.login", { status: "error", target: email });
+      recordAdmin(db, "sync.login", { status: "error", target: email, vaultId });
       return c.html(<WizardLogin error={`Login failed: ${(result.stderr || result.stdout).trim().slice(0, 500)}`} />);
     }
-    recordAdmin(db, "sync.login", { target: email });
+    recordAdmin(db, "sync.login", { target: email, vaultId });
     const listing = await obListRemoteVaults(config);
     if (!listing.ok) {
       return c.html(<WizardLogin error={`Signed in, but listing vaults failed: ${(listing.stderr || listing.stdout).trim().slice(0, 500)}`} />);
@@ -177,6 +189,7 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
   });
 
   app.post("/setup", async (c) => {
+    const { config, settings, sync, vaultId } = scope(c);
     const body = await c.req.parseBody();
     const vault = String(body.vault ?? "").trim();
     const password = String(body.password ?? "") || undefined;
@@ -194,42 +207,46 @@ export function syncRouter(db: Database, config: Config, sync: SyncSupervisor): 
         />,
       );
     }
-    setSetting(db, "sync_configured", "1");
-    recordAdmin(db, "sync.configure", { target: vault });
+    settings.set("sync_configured", "1");
+    recordAdmin(db, "sync.configure", { target: vault, vaultId });
     // Enable config syncing (plugins, appearance, hotkeys) on the fresh link.
     // sync-config is a separate ob command; failure here is non-fatal — the
     // vault is linked, config sync just stays off and can be enabled later.
     const cfg = await obSyncConfig(config);
-    recordAdmin(db, "sync.config", cfg.ok ? {} : { status: "error" });
+    recordAdmin(db, "sync.config", cfg.ok ? { vaultId } : { status: "error", vaultId });
     sync.start();
     c.header("HX-Redirect", "/app/sync");
     return c.html(<p>Connected.</p>);
   });
 
   app.post("/start", (c) => {
+    const { sync, vaultId } = scope(c);
     sync.start();
-    recordAdmin(db, "sync.start");
+    recordAdmin(db, "sync.start", { vaultId });
     return c.redirect("/app/sync");
   });
 
   app.post("/stop", async (c) => {
+    const { sync, vaultId } = scope(c);
     await sync.stop();
-    recordAdmin(db, "sync.stop");
+    recordAdmin(db, "sync.stop", { vaultId });
     return c.redirect("/app/sync");
   });
 
   app.post("/restart", async (c) => {
+    const { sync, vaultId } = scope(c);
     await sync.restart();
-    recordAdmin(db, "sync.restart");
+    recordAdmin(db, "sync.restart", { vaultId });
     return c.redirect("/app/sync");
   });
 
   app.post("/unlink", async (c) => {
+    const { config, settings, sync, vaultId } = scope(c);
     await sync.stop();
     await obSyncUnlink(config);
     await obLogout(config);
-    deleteSetting(db, "sync_configured");
-    recordAdmin(db, "sync.unlink");
+    settings.delete("sync_configured");
+    recordAdmin(db, "sync.unlink", { vaultId });
     return c.redirect("/app/sync");
   });
 

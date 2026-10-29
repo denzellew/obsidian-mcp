@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { Layout, Card } from "../layout.tsx";
-import type { AppDeps, AppEnv } from "../../app.tsx";
+import type { AppEnv } from "../../app.tsx";
+import { mcpPath } from "../../vaults/registry.ts";
 import { isMarkdown } from "../../vault/paths.ts";
 
 function ago(iso: string | null): string {
@@ -20,11 +21,12 @@ function StateBadge(props: { state: string }) {
   return <span class={`rounded px-2 py-0.5 text-xs font-medium ${color}`}>{props.state}</span>;
 }
 
-export function dashboardRouter(deps: AppDeps) {
+export function dashboardRouter() {
   const app = new Hono<AppEnv>();
 
   app.get("/", async (c) => {
-    const { vaultCtx, sync } = deps;
+    const vault = c.var.vault!;
+    const { ctx: vaultCtx, sync } = vault;
     const publicOrigin = c.var.publicOrigin;
     let notes = 0;
     let attachments = 0;
@@ -38,7 +40,7 @@ export function dashboardRouter(deps: AppDeps) {
     return c.html(
       <Layout title="Dashboard" activeNav="/app">
         <div class="space-y-6">
-          <h1 class="text-xl font-semibold">Dashboard</h1>
+          <h1 class="text-xl font-semibold">{vault.name}</h1>
 
           <div class="grid grid-cols-3 gap-4">
             <Card>
@@ -76,7 +78,7 @@ export function dashboardRouter(deps: AppDeps) {
           </Card>
 
           <Card title="MCP endpoint">
-            <p class="font-mono text-sm text-text-muted">{publicOrigin}/mcp</p>
+            <p class="font-mono text-sm text-text-muted">{publicOrigin}{mcpPath(vault)}</p>
             <p class="mt-2 text-sm text-text-muted">
               Connect Claude Desktop via OAuth (just add the URL) or create a bearer token under{" "}
               <a href="/app/tokens" class="text-accent-hover hover:underline">Tokens</a> for Claude Code.

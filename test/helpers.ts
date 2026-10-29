@@ -1,6 +1,11 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import type { Database } from "bun:sqlite";
+import type { Config } from "../src/config.ts";
+import { vaultSettings } from "../src/db/index.ts";
+import type { VaultContext } from "../src/mcp/context.ts";
+import { DEFAULT_VAULT_ID, VaultRegistry } from "../src/vaults/registry.ts";
 
 export interface TmpVault {
   dir: string;
@@ -60,4 +65,11 @@ export function fixtureVault(): TmpVault {
     "Templates/Daily.md": "# {{date}}\n\n## Log\n\n## Notes\n",
     ".trash/Old Note.md": "deleted content\n",
   });
+}
+
+/** A registry holding just the default vault, for tests that build their own context. */
+export function singleVault(config: Config, db: Database, ctx: VaultContext): VaultRegistry {
+  return new VaultRegistry([
+    { id: DEFAULT_VAULT_ID, slug: "default", name: "Vault", config, ctx, settings: vaultSettings(db, DEFAULT_VAULT_ID) },
+  ]);
 }
