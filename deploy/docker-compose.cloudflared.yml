@@ -1,33 +1,42 @@
+# One portal serving every vault through a Cloudflare Tunnel. A single public
+# hostname covers all vaults: each is at https://<host>/v/<slug>/mcp (the first
+# one also at /mcp), with its own OAuth discovery, tokens, and sync.
+#
+# 1. In Cloudflare Zero Trust, create a tunnel and point its public hostname
+#    (e.g. notes.example.com) at http://app:3000.
+# 2. Create a .env next to this file:
+#      CLOUDFLARED_TUNNEL_TOKEN=eyJ...
+# 3. docker compose -f docker-compose.cloudflared.yml up -d --build
+# 4. docker compose -f docker-compose.cloudflared.yml logs app
+#    ← grab the setup token, open https://<your-host>/setup
+#
+# PUBLIC_URL is optional: the app derives its public origin from cloudflared's
+# forwarded headers. Set it only to hard-pin the hostname.
+#
+# Coming from the old one-container-per-vault layout: stop it, then move
+# data/knowledge to data/app before the first start so that vault keeps its
+# passkeys, tokens, and sync link. Never run both against the same data.
 
-# PUBLIC_URL stays unset so each service derives its origin from the hostname
-# Cloudflare forwarded. The two data directories must never be shared.
-# Both services run the same image; MCP_PROFILE selects the personal API.
-
-x-mcp: &mcp
-  build:
-    context: ..
-    dockerfile: Dockerfile
-  image: obsidian-mcp:local
-  restart: unless-stopped
-  stop_grace_period: 30s
+# Named explicitly: compose otherwise names the project after this folder
+# ("deploy"), so another checkout's deploy/ would replace these containers.
+name: obsidian-mcp-app
 
 services:
-  knowledge-vault:
-    <<: *mcp
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: obsidian-mcp:app
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # environment:
+    #   PUBLIC_URL: https://notes.example.com   # optional override
     volumes:
-      - ./data/knowledge:/data
-
-  personal-context:
-    <<: *mcp
-    environment:
-      MCP_PROFILE: personal-context
-    volumes:
-      - ./data/personal:/data
+      - ./data/app:/data
 
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     depends_on:
-      - knowledge-vault
-      - personal-context
+      - app
     command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}

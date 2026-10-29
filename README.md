@@ -24,24 +24,24 @@ data/
 
 The server must be reachable over HTTPS (passkeys and Claude connectors require it). The recommended setup is a tunnel — no ports exposed at home:
 
-- [`deploy/docker-compose.gatecrash.yml`](deploy/docker-compose.gatecrash.yml) — self-hosted [Gatecrash](https://github.com/jclement/gatecrash) tunnel
-- [`deploy/docker-compose.cloudflared.yml`](deploy/docker-compose.cloudflared.yml) — Cloudflare Tunnel
+[`deploy/docker-compose.cloudflared.yml`](deploy/docker-compose.cloudflared.yml) runs the server behind a Cloudflare Tunnel. It builds from a checkout:
 
 ```sh
-mkdir obsidian-mcp && cd obsidian-mcp
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/jclement/obsidian-mcp/main/deploy/docker-compose.gatecrash.yml
-# create .env with tunnel credentials (see comments in the compose file)
-docker compose up -d
-docker compose logs app        # ← copy the FIRST-RUN SETUP token
+cd deploy
+# create .env with CLOUDFLARED_TUNNEL_TOKEN=… (see comments in the compose file)
+docker compose -f docker-compose.cloudflared.yml up -d --build
+docker compose -f docker-compose.cloudflared.yml logs app   # ← copy the FIRST-RUN SETUP token
 ```
 
 **Just want to try it locally** (no tunnel, no published image)? From a checkout:
 
 ```sh
-docker compose -f deploy/docker-compose.local.yml up --build
+docker compose -f deploy/docker-compose.local.yml up -d --build
 docker compose -f deploy/docker-compose.local.yml logs app   # ← setup token
-# open http://localhost:3000/setup
+# open http://localhost:3000/setup  (APP_PORT=3100 … to use another port)
 ```
+
+One `app` container serves every vault: add more from **Manage vaults…** in the vault switcher. Each vault has its own MCP endpoint (`/v/<slug>/mcp`; the first vault also answers at `/mcp`), tokens, connections, Obsidian Sync login, and snapshots.
 
 Open `https://your-host/setup`, paste the token, and register a passkey. That passkey is now the only way into the management UI; add more from the Passkeys page.
 
