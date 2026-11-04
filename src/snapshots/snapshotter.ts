@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Git } from "./git.ts";
 import { logger } from "../log.ts";
@@ -17,6 +17,38 @@ export interface SnapshotterOptions {
   debounceMs: number;
   maxWaitMs: number;
   intervalMs: number;
+}
+
+/** git's well-known empty tree, used as the parent of the root commit. */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/**
+ * Refs accepted from callers (MCP). Anything else is rejected before reaching
+ * git, so a value like "--output=/x" can never be parsed as an option.
+ */
+const REF_RE = /^(HEAD|[0-9a-f]{4,40})([~^][0-9]{0,4})*$/i;
+
+export class SnapshotRefError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export interface DiffFile {
+  path: string;
+  /** A added, M modified, D deleted, R renamed (old path in `from_path`). */
+  status: string;
+  from_path?: string;
+  additions: number | null;
+  deletions: number | null;
+}
+
+export interface DiffResult {
+  from: string;
+  /** Resolved sha, or null for the current working tree. */
+  to: string | null;
+  files: DiffFile[];
+  patch: string;
 }
 
 export interface CommitInfo {
@@ -155,9 +187,99 @@ export class Snapshotter {
     return stdout.split("\n").filter(Boolean);
   }
 
+  /** Validate a caller-supplied ref and resolve it to a full sha. */
+  async resolveRef(ref: string): Promise<string> {
+    if (!REF_RE.test(ref)) {
+      throw new SnapshotRefError(`'${ref}' is not a valid snapshot ref. Use a sha from snapshot_history, or HEAD / HEAD~N.`);
+    }
+    const sha = await this.git.revParse(`${ref}^{commit}`);
+    if (!sha) throw new SnapshotRefError(`Snapshot '${ref}' not found. Call snapshot_history to list available snapshots.`);
+    return sha;
+  }
+
+  /**
+   * Diff between snapshots, or from a snapshot to the current working tree
+   * (to omitted). `commit` diffs a single snapshot against its parent.
+   */
+  async diff(opts: { from?: string; to?: string; commit?: string; path?: string; context?: number } = {}): Promise<DiffResult> {
+    const head = await this.git.revParse("HEAD");
+    if (!head) throw new SnapshotRefError("No snapshots exist yet, so there is nothing to diff against.");
+    let from: string;
+    let to: string | null;
+    if (opts.commit) {
+      to = await this.resolveRef(opts.commit);
+      from = (await this.git.revParse(`${to}^`)) ?? EMPTY_TREE;
+    } else {
+      from = await this.resolveRef(opts.from ?? "HEAD");
+      to = opts.to ? await this.resolveRef(opts.to) : null;
+    }
+    const common = ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "-M"];
+    const pathArgs = opts.path ? ["--", opts.path] : [];
+
+    const run = async (env?: Record<string, string>) => {
+      const range = to ? [from, to] : ["--cached", from];
+      const ctxArg = `-U${opts.context ?? 3}`;
+      const [patch, status, numstat] = await Promise.all([
+        this.git.run([...common, ctxArg, ...range, ...pathArgs], { env }),
+        this.git.run([...common, "--name-status", "-z", ...range, ...pathArgs], { env }),
+        this.git.run([...common, "--numstat", "-z", ...range, ...pathArgs], { env }),
+      ]);
+      return { from, to, patch: patch.stdout, files: parseFiles(status.stdout, numstat.stdout) };
+    };
+
+    if (to) return this.enqueue(() => run());
+    // Working-tree diff via a throwaway index, so untracked files show up and
+    // the real index (owned by commit()) is never touched.
+    return this.enqueue(async () => {
+      const indexFile = join(this.git.gitDir, `diff-index-${process.pid}-${Date.now()}`);
+      const env = { GIT_INDEX_FILE: indexFile };
+      try {
+        await this.git.run(["read-tree", "HEAD"], { env });
+        await this.git.run(["add", "-A"], { env });
+        return await run(env);
+      } finally {
+        rmSync(indexFile, { force: true });
+      }
+    });
+  }
+
   /** Content of a file at a commit, or null when it didn't exist. */
   async fileAt(sha: string, path: string): Promise<string | null> {
     const r = await this.git.run(["show", `${sha}:${path}`], { allowFail: true });
     return r.exitCode === 0 ? r.stdout : null;
   }
+}
+
+/** Merge `--name-status -z` and `--numstat -z` output into one list. */
+function parseFiles(nameStatus: string, numstat: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  const ns = nameStatus.split("\0");
+  for (let i = 0; i < ns.length - 1; ) {
+    const code = ns[i++]!;
+    const letter = code[0]!;
+    if (letter === "R" || letter === "C") {
+      const fromPath = ns[i++]!;
+      files.push({ path: ns[i++]!, status: letter, from_path: fromPath, additions: null, deletions: null });
+    } else {
+      files.push({ path: ns[i++]!, status: letter, additions: null, deletions: null });
+    }
+  }
+  // numstat -z: "add\tdel\tpath\0" or, for renames, "add\tdel\t\0old\0new\0"
+  const counts = new Map<string, [number | null, number | null]>();
+  const nm = numstat.split("\0");
+  for (let i = 0; i < nm.length - 1; ) {
+    const [a, d, p] = nm[i++]!.split("\t");
+    let path = p;
+    if (!path) {
+      i++; // old path
+      path = nm[i++];
+    }
+    const n = (v: string | undefined) => (v === undefined || v === "-" ? null : Number(v));
+    if (path) counts.set(path, [n(a), n(d)]);
+  }
+  for (const f of files) {
+    const c = counts.get(f.path);
+    if (c) [f.additions, f.deletions] = c;
+  }
+  return files;
 }

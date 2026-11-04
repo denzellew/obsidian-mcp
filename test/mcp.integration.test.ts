@@ -67,7 +67,7 @@ afterAll(async () => {
 });
 
 describe("MCP integration", () => {
-  test("lists all 11 tools with annotations", async () => {
+  test("lists all 13 tools with annotations", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
@@ -80,7 +80,9 @@ describe("MCP integration", () => {
       "manage_note",
       "read_note",
       "search_vault",
+      "snapshot_history",
       "vault_config",
+      "vault_diff",
       "vault_info",
     ]);
     const read = tools.find((t) => t.name === "read_note")!;
@@ -333,6 +335,46 @@ describe("MCP integration", () => {
     const commits = await snapshotter.listCommits(100);
     expect(commits.length).toBeGreaterThanOrEqual(2);
     expect(commits.some((c) => c.message.startsWith("pre-op: move"))).toBe(true);
+  });
+
+  test("vault_diff shows unsnapshotted changes, snapshot_history + commit diff", async () => {
+    await snapshotter.flush();
+    // edit outside the MCP (as Sync would) — no snapshot is triggered
+    vault.write("Synced Note.md", "line one\nfrom another device\n");
+    const wt = jsonOf((await client.callTool({ name: "vault_diff", arguments: {} })) as CallToolResult);
+    expect(wt.to).toBe("working tree");
+    expect(wt.files).toContainEqual({ path: "Synced Note.md", status: "A", additions: 2, deletions: 0 });
+    expect(wt.patch).toContain("+from another device");
+
+    const stat = jsonOf((await client.callTool({ name: "vault_diff", arguments: { stat_only: true } })) as CallToolResult);
+    expect(stat.patch).toBeUndefined();
+
+    const small = jsonOf((await client.callTool({ name: "vault_diff", arguments: { max_chars: 500 } })) as CallToolResult);
+    if (wt.patch.length > 500) expect(small.truncated).toBe(true);
+
+    await snapshotter.commit("sync: Synced Note");
+    const hist = jsonOf(
+      (await client.callTool({ name: "snapshot_history", arguments: { path: "Synced Note", include_files: true } })) as CallToolResult,
+    );
+    expect(hist.path).toBe("Synced Note.md");
+    expect(hist.commits[0].message).toBe("sync: Synced Note");
+    expect(hist.commits[0].files).toEqual(["Synced Note.md"]);
+
+    const one = jsonOf(
+      (await client.callTool({ name: "vault_diff", arguments: { commit: hist.commits[0].sha } })) as CallToolResult,
+    );
+    expect(one.files.map((f: any) => f.path)).toEqual(["Synced Note.md"]);
+    expect(one.patch).toContain("+line one");
+
+    const clean = jsonOf((await client.callTool({ name: "vault_diff", arguments: {} })) as CallToolResult);
+    expect(clean.files).toEqual([]);
+  });
+
+  test("vault_diff rejects bad refs with a teaching error", async () => {
+    const r = (await client.callTool({ name: "vault_diff", arguments: { from: "--output=/tmp/x" } })) as CallToolResult;
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain("BAD_REF");
+    expect(textOf(r)).toContain("snapshot_history");
   });
 
   test("resources: vault root and note template", async () => {

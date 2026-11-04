@@ -11,6 +11,8 @@ import { registerManageNote } from "./tools/manage-note.ts";
 import { registerGetLinks } from "./tools/get-links.ts";
 import { registerListTags } from "./tools/list-tags.ts";
 import { registerDailyNote } from "./tools/daily-note.ts";
+import { registerSnapshotHistory } from "./tools/snapshot-history.ts";
+import { registerVaultDiff } from "./tools/vault-diff.ts";
 import { registerResources } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -20,7 +22,8 @@ export const SERVER_INSTRUCTIONS = `Obsidian vault server. The vault may be edit
 - Prefer surgical edits (replace/append) over whole-content replacement.
 - Call vault_info first in a session to learn the vault's structure, daily-note settings, and templates.
 - Paths are vault-relative; wikilink targets like "Note Name" are accepted wherever a path is expected.
-- Deletions go to .trash/ and every mutation is git-snapshotted — mistakes are recoverable, but say what you changed.`;
+- Deletions go to .trash/ and every mutation is git-snapshotted — mistakes are recoverable, but say what you changed.
+- Use vault_diff to see what changed (since the last snapshot, or in any snapshot from snapshot_history).`;
 
 export interface McpServerOptions {
   /** Called after each tool invocation for audit logging. */
@@ -76,6 +79,8 @@ export function createMcpServer(ctx: VaultContext, opts: McpServerOptions = {}):
   registerGetLinks(server, ctx);
   registerListTags(server, ctx);
   registerDailyNote(server, ctx);
+  registerSnapshotHistory(server, ctx);
+  registerVaultDiff(server, ctx);
   registerResources(server, ctx);
   registerPrompts(server, ctx);
   return server;

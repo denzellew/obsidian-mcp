@@ -22,7 +22,10 @@ export class Git {
     readonly workTree: string,
   ) {}
 
-  async run(args: string[], opts: { allowFail?: boolean } = {}): Promise<{ stdout: string; exitCode: number }> {
+  async run(
+    args: string[],
+    opts: { allowFail?: boolean; env?: Record<string, string> } = {},
+  ): Promise<{ stdout: string; exitCode: number }> {
     const full = [`--git-dir=${this.gitDir}`, `--work-tree=${this.workTree}`, ...args];
     const proc = Bun.spawn(["git", ...full], {
       stdout: "pipe",
@@ -33,6 +36,7 @@ export class Git {
         GIT_AUTHOR_EMAIL: "snapshots@local",
         GIT_COMMITTER_NAME: "obsidian-mcp",
         GIT_COMMITTER_EMAIL: "snapshots@local",
+        ...opts.env,
       },
     });
     const [stdout, stderr, exitCode] = await Promise.all([
