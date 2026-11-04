@@ -13,6 +13,7 @@ import { registerListTags } from "./tools/list-tags.ts";
 import { registerDailyNote } from "./tools/daily-note.ts";
 import { registerSnapshotHistory } from "./tools/snapshot-history.ts";
 import { registerVaultDiff } from "./tools/vault-diff.ts";
+import { registerManageBase } from "./tools/manage-base.ts";
 import { registerResources } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -81,6 +82,7 @@ export function createMcpServer(ctx: VaultContext, opts: McpServerOptions = {}):
   registerDailyNote(server, ctx);
   registerSnapshotHistory(server, ctx);
   registerVaultDiff(server, ctx);
+  registerManageBase(server, ctx);
   registerResources(server, ctx);
   registerPrompts(server, ctx);
   return server;

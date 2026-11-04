@@ -67,7 +67,7 @@ afterAll(async () => {
 });
 
 describe("MCP integration", () => {
-  test("lists all 13 tools with annotations", async () => {
+  test("lists all 14 tools with annotations", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
@@ -77,6 +77,7 @@ describe("MCP integration", () => {
       "edit_note",
       "get_links",
       "list_tags",
+      "manage_base",
       "manage_note",
       "read_note",
       "search_vault",
@@ -375,6 +376,79 @@ describe("MCP integration", () => {
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain("BAD_REF");
     expect(textOf(r)).toContain("snapshot_history");
+  });
+
+  test("manage_base: create → read_note → edit → stale/invalid errors", async () => {
+    const call = async (name: string, args: Record<string, unknown>) =>
+      (await client.callTool({ name, arguments: args })) as CallToolResult;
+
+    const created = jsonOf(await call("manage_base", { action: "create", path: "Bases/Projects", filters: 'file.inFolder("Projects")' }));
+    expect(created.path).toBe("Bases/Projects.base");
+    expect(created.summary.views).toEqual([{ name: "Table", type: "table" }]);
+    expect(created.embed).toBe("![[Projects.base]]");
+
+    const dup = await call("manage_base", { action: "create", path: "Bases/Projects" });
+    expect(dup.isError).toBe(true);
+    expect(textOf(dup)).toContain("ALREADY_EXISTS");
+    expect(jsonOf(await call("manage_base", { action: "create", path: "Bases/Projects", if_exists: "unique" })).path).toBe("Bases/Projects 1.base");
+
+    const badCreate = await call("manage_base", { action: "create", path: "Bases/Bad", filters: { xor: ["a"] } });
+    expect(badCreate.isError).toBe(true);
+    expect(textOf(badCreate)).toContain("INVALID_BASE");
+
+    const read = jsonOf(await call("read_note", { path: "Bases/Projects.base" }));
+    expect(read.type).toBe("base");
+    expect(read.base.filters).toBe('file.inFolder("Projects")');
+    expect(read.problems).toBeUndefined();
+
+    const edited = jsonOf(
+      await call("manage_base", {
+        action: "edit",
+        path: "Projects", // bare name resolves
+        expected_hash: read.hash,
+        edits: [
+          { type: "set_formula", name: "age", expression: "(now() - file.ctime) / 86400000" },
+          { type: "add_view", view: { type: "cards", name: "Active", filters: 'status == "active"' } },
+          { type: "update_view", name: "Table", set: { order: ["file.name", "note.status", "formula.age"] } },
+        ],
+      }),
+    );
+    expect(edited.path).toBe("Bases/Projects.base");
+    expect(edited.summary.views.map((v: any) => v.name)).toEqual(["Table", "Active"]);
+    expect(edited.summary.formulas).toEqual(["age"]);
+
+    const stale = await call("manage_base", {
+      action: "edit",
+      path: "Bases/Projects.base",
+      expected_hash: read.hash,
+      edits: [{ type: "remove_view", name: "Active" }],
+    });
+    expect(stale.isError).toBe(true);
+    expect(textOf(stale)).toContain("STALE_NOTE");
+
+    const invalid = await call("manage_base", {
+      action: "edit",
+      path: "Bases/Projects.base",
+      expected_hash: edited.hash,
+      edits: [{ type: "update_view", name: "Active", set: { type: "kanban" } }],
+    });
+    expect(invalid.isError).toBe(true);
+    expect(textOf(invalid)).toContain("INVALID_BASE");
+    expect(jsonOf(await call("read_note", { path: "Bases/Projects.base" })).hash).toBe(edited.hash); // unchanged
+
+    const noHash = await call("manage_base", { action: "edit", path: "Bases/Projects.base", edits: [{ type: "replace_yaml", yaml: "views: []" }] });
+    expect(textOf(noHash)).toContain("requires expected_hash");
+
+    const missing = await call("manage_base", { action: "edit", path: "Nope", edits: [{ type: "remove_view", name: "x" }] });
+    expect(textOf(missing)).toContain("Bases/Projects.base");
+
+    const viaEditNote = await call("edit_note", { path: "Bases/Projects.base", edits: [{ type: "append", content: "x" }] });
+    expect(textOf(viaEditNote)).toContain("manage_base");
+    expect(textOf(await call("create_note", { path: "X.base" }))).toContain("manage_base");
+
+    await snapshotter.flush();
+    const commits = await snapshotter.listCommits(20, "Bases/Projects.base");
+    expect(commits.some((c) => c.message === "mcp: manage_base edit Bases/Projects.base")).toBe(true);
   });
 
   test("resources: vault root and note template", async () => {

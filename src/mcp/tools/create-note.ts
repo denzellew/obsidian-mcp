@@ -6,7 +6,7 @@ import { notePayload } from "../note-io.ts";
 import { buildNote } from "../../vault/frontmatter.ts";
 import { noteTitle } from "../../vault/markdown.ts";
 import { applyTemplateVars } from "../../vault/obsidian-config.ts";
-import { safeWritePath, withMdExtension } from "../../vault/paths.ts";
+import { isBase, safeWritePath, withMdExtension } from "../../vault/paths.ts";
 
 export function registerCreateNote(server: McpServer, ctx: VaultContext) {
   server.registerTool(
@@ -28,6 +28,7 @@ export function registerCreateNote(server: McpServer, ctx: VaultContext) {
       annotations: { destructiveHint: false, idempotentHint: false },
     },
     guarded(async (args) => {
+      if (isBase(args.path)) return fail("INVALID_ARGS", "To create an Obsidian Base (.base), use manage_base with action:'create'.");
       let rel = withMdExtension(safeWritePath(args.path));
 
       let body = args.content ?? "";
