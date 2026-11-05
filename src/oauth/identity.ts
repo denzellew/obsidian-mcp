@@ -51,6 +51,16 @@ export function describeClient(c: ClientIdentity): string {
   return out;
 }
 
+/**
+ * Stable identifier for "the same app" across re-registrations: clients such
+ * as claude.ai register a fresh client_id on reconnect, so the owner's name
+ * for a connection follows this key rather than the client_id. It's the auto
+ * name without MCP clientInfo (unknown until the first initialize).
+ */
+export function identityKey(c: Pick<ClientIdentity, "client_name" | "redirect_uris">): string {
+  return describeClient({ client_name: c.client_name, redirect_uris: c.redirect_uris });
+}
+
 /** The owner's label when set, else the auto-derived name. */
 export function connectionName(label: string | null | undefined, c: ClientIdentity): string {
   const l = label?.trim();

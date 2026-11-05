@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Database } from "bun:sqlite";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
-import { listConnections, revokeClient, setConnectionLabel, type ConnectionRow } from "../../oauth/router.ts";
+import { listConnections, revokeClient, setIdentityLabel, type ConnectionRow } from "../../oauth/router.ts";
 import { MAX_LABEL_CHARS, mcpClientLabel, normalizeLabel, redirectHint } from "../../oauth/identity.ts";
 import { recordAdmin } from "../../audit.ts";
 
@@ -23,6 +23,7 @@ function details(conn: ConnectionRow): string {
   const clients = [...new Set(conn.grants.map((g) => mcpClientLabel(g.mcp_client_name, g.mcp_client_version)).filter(Boolean))];
   if (clients.length) parts.push(`MCP client ${clients.join(", ")}`);
   if (conn.software_id) parts.push(`software ${conn.software_id}${conn.software_version ? ` ${conn.software_version}` : ""}`);
+  if (conn.client_ids.length > 1) parts.push(`${conn.client_ids.length} registrations, showing the most recent`);
   return parts.join(" · ");
 }
 
@@ -97,16 +98,20 @@ export function connectionsRouter(db: Database): Hono<AuthEnv> {
     ),
   );
 
-  // blank label clears it, falling back to the auto-derived name
+  const groupOf = (vaultId: number, clientId: string) =>
+    listConnections(db, vaultId).find((conn) => conn.client_ids.includes(clientId));
+
+  // Names the app, not one registration: later re-registrations inherit it.
+  // A blank label clears it, falling back to the auto-derived name.
   app.put("/:clientId/label", async (c) => {
     const clientId = decodeURIComponent(c.req.param("clientId"));
     const vaultId = c.var.vault!.id;
-    const before = listConnections(db, vaultId).find((conn) => conn.client_id === clientId);
+    const before = groupOf(vaultId, clientId);
     if (before) {
       const body = await c.req.parseBody();
       const label = normalizeLabel(body.label);
-      if (label !== before.label && setConnectionLabel(db, clientId, vaultId, label)) {
-        const after = listConnections(db, vaultId).find((conn) => conn.client_id === clientId);
+      if (label !== before.label && setIdentityLabel(db, vaultId, before.key, label)) {
+        const after = groupOf(vaultId, clientId);
         recordAdmin(db, "oauth.rename", { target: `${before.display_name} → ${after?.display_name ?? label}`, vaultId });
       }
     }
@@ -116,9 +121,9 @@ export function connectionsRouter(db: Database): Hono<AuthEnv> {
   app.delete("/:clientId", (c) => {
     const clientId = decodeURIComponent(c.req.param("clientId"));
     const vaultId = c.var.vault!.id;
-    const conn = listConnections(db, vaultId).find((conn) => conn.client_id === clientId);
+    const conn = groupOf(vaultId, clientId);
     if (conn) {
-      revokeClient(db, clientId, vaultId);
+      for (const id of conn.client_ids) revokeClient(db, id, vaultId);
       recordAdmin(db, "oauth.revoke", { target: conn.display_name, vaultId });
     }
     return c.html(<ConnectionList connections={listConnections(db, vaultId)} />);

@@ -185,10 +185,23 @@ describe("scoped pages", () => {
     const audit = db.query<{ target: string }, []>("SELECT target FROM audit_log WHERE event = 'oauth.rename' ORDER BY id DESC LIMIT 1").get()!;
     expect(audit.target).toBe("Claude · claude.ai → Phone");
 
-    // blank clears the label → auto name again
-    await fetch(`${base}/app/connections/obcl_named/label`, { method: "PUT", headers, body: "label=" });
-    const label = db.query<{ label: string | null }, []>("SELECT label FROM oauth_consents WHERE client_id = 'obcl_named'").get()!;
-    expect(label.label).toBeNull();
+    // a later re-registration of the same app joins the group and shows under its name
+    db.query(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, consented_at) VALUES ('obcl_named2', 'Claude', '[\"https://claude.ai/cb\"]', unixepoch())",
+    ).run();
+    db.query("INSERT INTO oauth_consents (client_id, vault_id) VALUES ('obcl_named2', ?)").run(personal.id);
+    html = await (await fetch(`${base}/app/connections`, { headers: { Cookie: as("personal") } })).text();
+    expect(html.match(/>Phone</g)).toHaveLength(1);
+    expect(html).toContain("2 registrations");
+
+    // blank clears the label for the whole app → auto name again
+    await fetch(`${base}/app/connections/obcl_named2/label`, { method: "PUT", headers, body: "label=" });
+    const labels = db.query<{ label: string | null }, []>("SELECT label FROM oauth_consents WHERE client_id LIKE 'obcl_named%'").all();
+    expect(labels.map((l) => l.label)).toEqual([null, null]);
+
+    // revoking the connection revokes every registration of it
+    await fetch(`${base}/app/connections/obcl_named2`, { method: "DELETE", headers });
+    expect(db.query("SELECT 1 FROM oauth_consents WHERE client_id LIKE 'obcl_named%'").get()).toBeNull();
   });
 
   test("connections list and revoke only the selected vault's consent", async () => {

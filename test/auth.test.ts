@@ -12,6 +12,7 @@ import { Snapshotter } from "../src/snapshots/snapshotter.ts";
 import { createVaultContext } from "../src/mcp/context.ts";
 import { createApiToken, listApiTokens, revokeApiToken, verifyBearer, mintToken, hashToken } from "../src/auth/tokens.ts";
 import { listAudit, recordMcpCall } from "../src/audit.ts";
+import { listConnections } from "../src/oauth/router.ts";
 import { createSession, getSession, deleteSession, sweepExpired } from "../src/auth/sessions.ts";
 import { resetRateLimits, SESSION_COOKIE } from "../src/auth/middleware.ts";
 import { redirectUriMatches, isRegistrableRedirectUri } from "../src/oauth/policy.ts";
@@ -448,6 +449,33 @@ describe("connection identity", () => {
     const row = db.query<{ label: string }, [string]>("SELECT label FROM oauth_consents WHERE client_id = ?").get(client_id)!;
     expect(row.label).toBe("Work laptop");
     expect(listAudit(db, { limit: 20 }).find((e) => e.event === "oauth.consent")!.target).toBe("Work laptop");
+  });
+
+  test("a re-registration of the same app inherits its name without renaming", async () => {
+    // consent page for a brand-new client_id is pre-filled with the name already in use
+    const { client_id: fresh } = await registerClient();
+    const { challenge } = pkcePair();
+    const page = await (
+      await fetch(
+        `${base}/oauth/authorize?response_type=code&client_id=${fresh}&redirect_uri=${encodeURIComponent("http://localhost:33418/callback")}&code_challenge=${challenge}&code_challenge_method=S256&resource=${encodeURIComponent(RESOURCE)}`,
+        { headers: { Cookie: sessionCookieHeader() } },
+      )
+    ).text();
+    expect(page).toContain('value="Work laptop"');
+
+    // approving without a label field (or with it unchanged) keeps the name
+    const { tokens } = await fullOAuthFlow();
+    expect(verifyBearer(db, tokens.access_token)!.name).toBe("Work laptop");
+
+    // all registrations collapse into one connection showing the most recent
+    const groups = listConnections(db, vaultId).filter((g) => g.key === "Test Client · local app");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.display_name).toBe("Work laptop");
+    expect(groups[0]!.client_ids.length).toBeGreaterThan(2);
+
+    // submitting the auto name unchanged stores no label → app goes back to auto naming
+    const again = await fullOAuthFlow({ label: "Test Client · local app" });
+    expect(verifyBearer(db, again.tokens.access_token)!.name).toBe("Test Client · local app");
   });
 
   test("registration stores optional RFC 7591 metadata", async () => {
