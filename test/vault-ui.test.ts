@@ -9,7 +9,7 @@ import { openDatabase } from "../src/db/index.ts";
 import { createApiToken, listApiTokens } from "../src/auth/tokens.ts";
 import { createSession } from "../src/auth/sessions.ts";
 import { resetRateLimits, SESSION_COOKIE } from "../src/auth/middleware.ts";
-import { recordAdmin } from "../src/audit.ts";
+import { recordAdmin, recordMcpCall } from "../src/audit.ts";
 import { VaultRegistry, type VaultInstance } from "../src/vaults/registry.ts";
 import { VAULT_COOKIE } from "../src/web/vault-context.tsx";
 
@@ -167,6 +167,27 @@ describe("scoped pages", () => {
     expect(html).toContain("server-wide-passkey");
     expect(html).not.toContain("only-in-default");
     expect(token.token).toStartWith("obmcp_");
+  });
+
+  test("tools page lists every MCP tool with badges, params and this vault's usage", async () => {
+    const principal = { kind: "static" as const, id: "tok", name: "t", vaultId: personal.id };
+    recordMcpCall(db, principal, "read_note", { path: "a" }, "ok");
+    recordMcpCall(db, principal, "read_note", { path: "b" }, "error", "NOT_FOUND");
+    recordMcpCall(db, { ...principal, vaultId: def.id }, "edit_note", { path: "x" }, "ok"); // other vault
+
+    const html = await (await fetch(`${base}/app/tools`, { headers: { Cookie: as("personal") } })).text();
+    for (const name of ["read_note", "edit_note", "manage_base", "vault_diff", "snapshot_history", "vault_info"]) {
+      expect(html).toContain(`id="tool-${name}"`);
+    }
+    expect(html).toContain("14 tools available");
+    expect(html).toContain('href="/app/tools"');
+    const card = (name: string) => html.slice(html.indexOf(`id="tool-${name}"`)).split('id="tool-')[1]!;
+    expect(card("read_note")).toContain("read-only");
+    expect(card("read_note")).toContain("2 calls · 1 error");
+    expect(card("edit_note")).toContain("destructive");
+    expect(card("edit_note")).toContain("unused in 30d");
+    expect(card("edit_note")).toContain("expected_hash");
+    expect(html).toContain("Server instructions");
   });
 
   test("connections show auto names and can be renamed per vault", async () => {

@@ -42,6 +42,7 @@ export function Layout(props: { title?: string; children: Child; nav?: boolean; 
 const NAV_ITEMS = [
   ["/app", "Dashboard"],
   ["/app/audit", "Activity"],
+  ["/app/tools", "Tools"],
   ["/app/guidance", "Guidance"],
   ["/app/tokens", "Tokens"],
   ["/app/connections", "Connections"],

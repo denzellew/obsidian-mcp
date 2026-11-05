@@ -28,6 +28,7 @@ import { syncRouter } from "./web/routes/sync.tsx";
 import { snapshotsRouter } from "./web/routes/snapshots.tsx";
 import { auditRouter } from "./web/routes/audit.tsx";
 import { guidanceRouter } from "./web/routes/guidance.tsx";
+import { toolsRouter } from "./web/routes/tools.tsx";
 import { vaultsRouter } from "./web/routes/vaults.tsx";
 import { selectVault, vaultSwitchRouter } from "./web/vault-context.tsx";
 import { recordMcpCall } from "./audit.ts";
@@ -143,6 +144,7 @@ export function createApp(deps: AppDeps) {
   app.route("/app/connections", connectionsRouter(db));
   app.route("/app/audit", auditRouter(db));
   app.route("/app/guidance", guidanceRouter(db));
+  app.route("/app/tools", toolsRouter(db));
   app.route("/app/sync", syncRouter(db));
   app.route("/app/snapshots", snapshotsRouter(db));
   app.route("/app", dashboardRouter());
