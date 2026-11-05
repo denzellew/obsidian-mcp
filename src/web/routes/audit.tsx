@@ -55,7 +55,10 @@ function Rows(props: { entries: AuditEntry[] }) {
               <span class={`rounded px-2 py-0.5 text-xs font-medium ${BADGE[cat]}`}>{e.action ?? e.event}</span>
             </td>
             <td class="py-2 pr-4 font-mono text-xs">{e.target ?? "—"}</td>
-            <td class="py-2 pr-4 text-text-muted">{e.actor_name}</td>
+            <td class="py-2 pr-4 text-text-muted" title={e.actor_id ? `${e.actor_kind} credential ${e.actor_id}` : e.actor_kind}>
+              {e.actor_name}
+              {e.actor_id ? <span class="ml-1 font-mono text-xs opacity-60">#{e.actor_id.slice(0, 6)}</span> : null}
+            </td>
             <td class="py-2">
               {e.status === "error" ? (
                 <span class="text-danger" title={e.detail ?? ""}>

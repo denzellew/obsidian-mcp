@@ -16,7 +16,7 @@ import {
   securityHeaders,
   type AuthEnv,
 } from "./auth/middleware.ts";
-import { abortRegistry, hashToken } from "./auth/tokens.ts";
+import { abortRegistry, extractClientInfo, hashToken, recordClientInfo } from "./auth/tokens.ts";
 import { oauthInteractiveRouter, oauthPublicRouter, wellKnownRouter } from "./oauth/router.ts";
 import { setupRouter, type SetupState } from "./web/routes/setup.tsx";
 import { loginRouter } from "./web/routes/login.tsx";
@@ -90,6 +90,13 @@ export function createApp(deps: AppDeps) {
   const serveMcp = async (c: Context<AppEnv>) => {
     const transport = new StreamableHTTPTransport();
     const principal = c.var.principal!;
+    if (c.req.method === "POST") {
+      // read a clone so the transport still gets the untouched body
+      try {
+        const info = extractClientInfo(await c.req.raw.clone().json());
+        if (info) recordClientInfo(db, principal, info);
+      } catch {}
+    }
     const server = createMcpServer(c.var.vault!.ctx, {
       onToolCall: (tool, args, result) =>
         recordMcpCall(

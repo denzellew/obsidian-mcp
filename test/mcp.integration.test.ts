@@ -20,6 +20,7 @@ let snapsDir: string;
 let server: ReturnType<typeof Bun.serve>;
 let client: Client;
 let snapshotter: Snapshotter;
+let db: ReturnType<typeof openDatabase>;
 
 function textOf(result: CallToolResult): string {
   const block = result.content.find((c) => c.type === "text");
@@ -33,7 +34,7 @@ function jsonOf(result: CallToolResult): any {
 beforeAll(async () => {
   vault = fixtureVault();
   snapsDir = mkdtempSync(join(tmpdir(), "obmcp-snaps-"));
-  const db = openDatabase(":memory:");
+  db = openDatabase(":memory:");
   const store = new VaultStore(vault.dir);
   const links = new LinkIndex(store);
   snapshotter = new Snapshotter(snapsDir, vault.dir, { debounceMs: 50, maxWaitMs: 500, intervalMs: 600_000 });
@@ -90,6 +91,13 @@ describe("MCP integration", () => {
     expect(read.annotations?.readOnlyHint).toBe(true);
     const edit = tools.find((t) => t.name === "edit_note")!;
     expect(edit.annotations?.destructiveHint).toBe(true);
+  });
+
+  test("initialize records the MCP client on the token", () => {
+    const row = db.query<{ mcp_client_name: string; mcp_client_version: string }, []>(
+      "SELECT mcp_client_name, mcp_client_version FROM api_tokens WHERE name = 'integration-test'",
+    ).get()!;
+    expect(row).toEqual({ mcp_client_name: "test-client", mcp_client_version: "0.0.0" });
   });
 
   test("vault_info reports config and counts", async () => {

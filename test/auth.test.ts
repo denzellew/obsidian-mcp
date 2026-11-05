@@ -11,6 +11,7 @@ import { LinkIndex } from "../src/vault/links.ts";
 import { Snapshotter } from "../src/snapshots/snapshotter.ts";
 import { createVaultContext } from "../src/mcp/context.ts";
 import { createApiToken, listApiTokens, revokeApiToken, verifyBearer, mintToken, hashToken } from "../src/auth/tokens.ts";
+import { listAudit, recordMcpCall } from "../src/audit.ts";
 import { createSession, getSession, deleteSession, sweepExpired } from "../src/auth/sessions.ts";
 import { resetRateLimits, SESSION_COOKIE } from "../src/auth/middleware.ts";
 import { redirectUriMatches, isRegistrableRedirectUri } from "../src/oauth/policy.ts";
@@ -73,7 +74,7 @@ async function registerClient(redirectUris = ["http://localhost:33418/callback"]
 /** Full code flow with consent; returns the token response. */
 const RESOURCE = "http://localhost:3000/v/main/mcp";
 
-async function fullOAuthFlow(opts: { resource?: string } = {}) {
+async function fullOAuthFlow(opts: { resource?: string; label?: string } = {}) {
   const resource = opts.resource ?? RESOURCE;
   const { client_id } = await registerClient();
   const { verifier, challenge } = pkcePair();
@@ -97,6 +98,7 @@ async function fullOAuthFlow(opts: { resource?: string } = {}) {
     code_challenge_method: "S256",
     state: "xyz",
     resource,
+    ...(opts.label !== undefined ? { label: opts.label } : {}),
   });
   res = await fetch(`${base}/oauth/consent`, {
     method: "POST",
@@ -396,6 +398,84 @@ describe("OAuth flow", () => {
     });
     expect(res.status).toBe(200);
     expect(await mcpPing(tokens.access_token)).toBe(401);
+  });
+});
+
+describe("connection identity", () => {
+  async function initialize(token: string, clientInfo: Record<string, unknown>) {
+    const res = await fetch(`${base}/v/main/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo },
+      }),
+    });
+    await res.text();
+    return res.status;
+  }
+
+  test("consent page suggests an auto name; it becomes the principal name with clientInfo", async () => {
+    const { client_id } = await registerClient();
+    const { challenge } = pkcePair();
+    const page = await (
+      await fetch(
+        `${base}/oauth/authorize?response_type=code&client_id=${client_id}&redirect_uri=${encodeURIComponent("http://localhost:33418/callback")}&code_challenge=${challenge}&code_challenge_method=S256&resource=${encodeURIComponent(RESOURCE)}`,
+        { headers: { Cookie: sessionCookieHeader() } },
+      )
+    ).text();
+    expect(page).toContain('name="label"');
+    expect(page).toContain('value="Test Client · local app"');
+
+    // blank label → auto name, refined once the client reports clientInfo
+    const { tokens } = await fullOAuthFlow({ label: "" });
+    expect(verifyBearer(db, tokens.access_token)!.name).toBe("Test Client · local app");
+    expect(await initialize(tokens.access_token, { name: "claude-code", version: "2.1.3" })).toBe(200);
+    const principal = verifyBearer(db, tokens.access_token)!;
+    expect(principal.name).toBe("Test Client · local app (claude-code 2.1.3)");
+
+    recordMcpCall(db, principal, "vault_info", {}, "ok");
+    const entry = listAudit(db, { limit: 1 })[0]!;
+    expect(entry.actor_name).toBe("Test Client · local app (claude-code 2.1.3)");
+    expect(entry.actor_id).toBe(principal.id);
+  });
+
+  test("an owner label wins and is audited on consent", async () => {
+    const { tokens, client_id } = await fullOAuthFlow({ label: "  Work laptop  " });
+    expect(verifyBearer(db, tokens.access_token)!.name).toBe("Work laptop");
+    const row = db.query<{ label: string }, [string]>("SELECT label FROM oauth_consents WHERE client_id = ?").get(client_id)!;
+    expect(row.label).toBe("Work laptop");
+    expect(listAudit(db, { limit: 20 }).find((e) => e.event === "oauth.consent")!.target).toBe("Work laptop");
+  });
+
+  test("registration stores optional RFC 7591 metadata", async () => {
+    const res = await fetch(`${base}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Meta",
+        redirect_uris: ["http://localhost:1/cb"],
+        software_id: "com.example.app",
+        software_version: "3.2",
+        client_uri: "https://example.com",
+      }),
+    });
+    const { client_id } = (await res.json()) as { client_id: string };
+    const row = db
+      .query<{ software_id: string; software_version: string; client_uri: string }, [string]>(
+        "SELECT software_id, software_version, client_uri FROM oauth_clients WHERE client_id = ?",
+      )
+      .get(client_id)!;
+    expect(row).toEqual({ software_id: "com.example.app", software_version: "3.2", client_uri: "https://example.com" });
+  });
+
+  test("static tokens record clientInfo but keep the owner's token name", async () => {
+    const { token, row } = createApiToken(db, "ci box", vaultId);
+    expect(await initialize(token, { name: "my-agent", version: "0.9" })).toBe(200);
+    expect(verifyBearer(db, token)!.name).toBe("ci box");
+    expect(listApiTokens(db).find((t) => t.id === row.id)).toMatchObject({ mcp_client_name: "my-agent", mcp_client_version: "0.9" });
   });
 });
 

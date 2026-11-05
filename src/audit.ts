@@ -10,6 +10,7 @@ export interface AuditEntry {
   source: AuditSource;
   actor_kind: string;
   actor_name: string;
+  actor_id: string | null;
   event: string;
   action: string | null;
   target: string | null;
@@ -30,7 +31,17 @@ export type AuditCategory =
   | "config"
   | "other";
 
-const READ_TOOLS = new Set(["vault_info", "browse_vault", "search_vault", "read_note", "get_links", "list_tags"]);
+const READ_TOOLS = new Set([
+  "vault_info",
+  "vault_config",
+  "browse_vault",
+  "search_vault",
+  "read_note",
+  "get_links",
+  "list_tags",
+  "snapshot_history",
+  "vault_diff",
+]);
 
 /** Which source bucket an owner ("admin") event belongs to. */
 function adminSourceFor(event: string): AuditSource {
@@ -44,6 +55,7 @@ export function categorize(source: AuditSource, event: string, action: string | 
     if (event === "create_note") return "create";
     if (event === "edit_note") return "edit";
     if (event === "daily_note") return "daily";
+    if (event === "manage_base") return action?.endsWith("create") ? "create" : "edit";
     if (event === "manage_note") {
       if (action?.endsWith("delete")) return "delete";
       if (action?.endsWith("move")) return "move";
@@ -66,6 +78,7 @@ export function categorize(source: AuditSource, event: string, action: string | 
     case "vault.remove":
       return "delete";
     case "oauth.consent":
+    case "oauth.rename":
     case "setup.complete":
     case "session.revoke_others":
       return "auth";
@@ -84,6 +97,7 @@ function insert(
     source: AuditSource;
     actorKind: string;
     actorName: string;
+    actorId?: string | null;
     event: string;
     action?: string | null;
     target?: string | null;
@@ -93,11 +107,12 @@ function insert(
   },
 ) {
   db.query(
-    "INSERT INTO audit_log (source, actor_kind, actor_name, event, action, target, status, detail, vault_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO audit_log (source, actor_kind, actor_name, actor_id, event, action, target, status, detail, vault_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     e.source,
     e.actorKind,
     e.actorName,
+    e.actorId ?? null,
     e.event,
     e.action ?? null,
     e.target ?? null,
@@ -141,6 +156,16 @@ export function summarize(tool: string, args: Record<string, unknown>): { action
       return { action: "get_links", target: str(args.path) };
     case "list_tags":
       return { action: "list_tags", target: str(args.prefix) };
+    case "manage_base": {
+      const types = Array.isArray(args.edits)
+        ? [...new Set((args.edits as { type?: string }[]).map((e) => e.type).filter(Boolean))].join("+")
+        : null;
+      return { action: types ? `manage_base:edit:${types}` : `manage_base:${str(args.action) ?? "?"}`, target: str(args.path) };
+    }
+    case "vault_diff":
+      return { action: "vault_diff", target: str(args.commit) ?? (str(args.from) || str(args.to) ? `${str(args.from) ?? "HEAD"}..${str(args.to) ?? "working tree"}` : str(args.path) ?? "since last snapshot") };
+    case "snapshot_history":
+      return { action: "snapshot_history", target: str(args.path) ?? "all" };
     default:
       return { action: tool, target: str(args.path) ?? null };
   }
@@ -155,7 +180,7 @@ export function recordMcpCall(
   detail?: string,
 ) {
   const { action, target } = summarize(tool, args);
-  insert(db, { source: "agent", actorKind: principal.kind, actorName: principal.name, event: tool, action, target, status, detail, vaultId: principal.vaultId });
+  insert(db, { source: "agent", actorKind: principal.kind, actorName: principal.name, actorId: principal.id, event: tool, action, target, status, detail, vaultId: principal.vaultId });
 }
 
 // --- Owner (security/config) actions ---------------------------------------

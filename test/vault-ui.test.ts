@@ -169,6 +169,28 @@ describe("scoped pages", () => {
     expect(token.token).toStartWith("obmcp_");
   });
 
+  test("connections show auto names and can be renamed per vault", async () => {
+    db.query(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, consented_at) VALUES ('obcl_named', 'Claude', '[\"https://claude.ai/cb\"]', unixepoch())",
+    ).run();
+    db.query("INSERT INTO oauth_consents (client_id, vault_id) VALUES ('obcl_named', ?)").run(personal.id);
+    const headers = { Cookie: as("personal"), Origin: base, "HX-Request": "true", "X-Vault": "personal", "Content-Type": "application/x-www-form-urlencoded" };
+
+    let html = await (await fetch(`${base}/app/connections`, { headers: { Cookie: as("personal") } })).text();
+    expect(html).toContain("Claude · claude.ai");
+    expect(html).toContain("registered as &quot;Claude&quot;");
+
+    html = await (await fetch(`${base}/app/connections/obcl_named/label`, { method: "PUT", headers, body: "label=Phone" })).text();
+    expect(html).toContain("Phone");
+    const audit = db.query<{ target: string }, []>("SELECT target FROM audit_log WHERE event = 'oauth.rename' ORDER BY id DESC LIMIT 1").get()!;
+    expect(audit.target).toBe("Claude · claude.ai → Phone");
+
+    // blank clears the label → auto name again
+    await fetch(`${base}/app/connections/obcl_named/label`, { method: "PUT", headers, body: "label=" });
+    const label = db.query<{ label: string | null }, []>("SELECT label FROM oauth_consents WHERE client_id = 'obcl_named'").get()!;
+    expect(label.label).toBeNull();
+  });
+
   test("connections list and revoke only the selected vault's consent", async () => {
     db.query("INSERT INTO oauth_clients (client_id, client_name, redirect_uris, consented_at) VALUES ('obcl_both', 'Both Vaults', '[]', unixepoch())").run();
     db.query("INSERT INTO oauth_consents (client_id, vault_id) VALUES ('obcl_both', ?), ('obcl_both', ?)").run(def.id, personal.id);

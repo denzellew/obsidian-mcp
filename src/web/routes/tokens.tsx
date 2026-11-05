@@ -5,6 +5,7 @@ import type { AuthEnv } from "../../auth/middleware.ts";
 import { createApiToken, listApiTokens, revokeApiToken, type ApiTokenRow } from "../../auth/tokens.ts";
 import { recordAdmin } from "../../audit.ts";
 import { mcpPath } from "../../vaults/registry.ts";
+import { mcpClientLabel } from "../../oauth/identity.ts";
 
 function ago(unix: number | null): string {
   if (!unix) return "never";
@@ -34,7 +35,12 @@ function TokenTable(props: { tokens: ApiTokenRow[] }) {
       <tbody>
         {active.map((t) => (
           <tr class="border-b border-base-800">
-            <td class="py-2 pr-4">{t.name}</td>
+            <td class="py-2 pr-4">
+              {t.name}
+              {t.mcp_client_name ? (
+                <span class="block text-xs text-text-muted">last client: {mcpClientLabel(t.mcp_client_name, t.mcp_client_version)}</span>
+              ) : null}
+            </td>
             <td class="py-2 pr-4 font-mono text-text-muted">{t.token_prefix}…</td>
             <td class="py-2 pr-4 text-text-muted">{ago(t.created_at)}</td>
             <td class="py-2 pr-4 text-text-muted">{ago(t.last_used_at)}</td>

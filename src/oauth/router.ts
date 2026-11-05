@@ -6,6 +6,7 @@ import { abortRegistry, hashToken, mintToken } from "../auth/tokens.ts";
 import { isRegistrableRedirectUri, pkceChallengeFromVerifier, redirectUriMatches } from "./policy.ts";
 import { ConsentPage, OAuthErrorPage } from "../web/routes/consent.tsx";
 import { recordAdmin } from "../audit.ts";
+import { connectionName, describeClient, normalizeLabel } from "./identity.ts";
 import { logger } from "../log.ts";
 import type { VaultInstance, VaultRegistry } from "../vaults/registry.ts";
 
@@ -22,6 +23,9 @@ export interface ClientRow {
   client_name: string;
   redirect_uris: string;
   logo_uri: string | null;
+  software_id: string | null;
+  software_version: string | null;
+  client_uri: string | null;
   created_at: number;
   consented_at: number | null;
 }
@@ -127,12 +131,10 @@ export function oauthPublicRouter(db: Database, vaults: VaultRegistry): Hono<Aut
     const clientId = `obcl_${randomBytes(15).toString("base64url")}`;
     const clientName = typeof body.client_name === "string" && body.client_name.trim() ? body.client_name.trim().slice(0, 100) : "Unnamed client";
     const logoUri = typeof body.logo_uri === "string" ? body.logo_uri.slice(0, 500) : null;
-    db.query("INSERT INTO oauth_clients (client_id, client_name, redirect_uris, logo_uri) VALUES (?, ?, ?, ?)").run(
-      clientId,
-      clientName,
-      JSON.stringify(redirectUris),
-      logoUri,
-    );
+    const meta = (k: string, max: number) => (typeof body[k] === "string" && body[k].trim() ? (body[k] as string).trim().slice(0, max) : null);
+    db.query(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, logo_uri, software_id, software_version, client_uri) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(clientId, clientName, JSON.stringify(redirectUris), logoUri, meta("software_id", 100), meta("software_version", 50), meta("client_uri", 500));
     log.info(`registered OAuth client '${clientName}' (${clientId})`);
     return c.json(
       {
@@ -369,7 +371,17 @@ export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hon
     if (hasConsent(db, v.params.client_id, v.params.vault.id)) {
       return c.redirect(issueCodeAndRedirect(db, v.params));
     }
-    return c.html(ConsentPage({ client: v.client, vaultName: v.params.vault.name, params: q }));
+    const existing = db
+      .query<{ label: string | null }, [string, number]>("SELECT label FROM oauth_consents WHERE client_id = ? AND vault_id = ?")
+      .get(v.params.client_id, v.params.vault.id);
+    return c.html(
+      ConsentPage({
+        client: v.client,
+        vaultName: v.params.vault.name,
+        params: q,
+        suggestedLabel: existing?.label ?? describeClient(v.client),
+      }),
+    );
   });
 
   app.post("/consent", async (c) => {
@@ -391,8 +403,9 @@ export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hon
       return c.redirect(u.toString());
     }
     db.query("UPDATE oauth_clients SET consented_at = unixepoch() WHERE client_id = ?").run(v.params.client_id);
-    db.query("INSERT OR REPLACE INTO oauth_consents (client_id, vault_id) VALUES (?, ?)").run(v.params.client_id, v.params.vault.id);
-    recordAdmin(db, "oauth.consent", { target: v.client.client_name, vaultId: v.params.vault.id });
+    const label = normalizeLabel(body.label);
+    db.query("INSERT OR REPLACE INTO oauth_consents (client_id, vault_id, label) VALUES (?, ?, ?)").run(v.params.client_id, v.params.vault.id, label);
+    recordAdmin(db, "oauth.consent", { target: connectionName(label, v.client), vaultId: v.params.vault.id });
     return c.redirect(issueCodeAndRedirect(db, v.params));
   });
 
@@ -402,27 +415,47 @@ export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hon
 // ---------------------------------------------------------------------------
 // Management queries for the UI
 
+export interface GrantSummary {
+  id: string;
+  created_at: number;
+  last_used_at: number | null;
+  access_expires_at: number;
+  mcp_client_name: string | null;
+  mcp_client_version: string | null;
+}
+
 export interface ConnectionRow extends ClientRow {
-  grants: { id: string; created_at: number; last_used_at: number | null; access_expires_at: number }[];
+  label: string | null;
+  /** label, or the auto-derived name using the most recent grant's MCP clientInfo. */
+  display_name: string;
+  grants: GrantSummary[];
 }
 
 /** Clients approved for one vault, with their live grants for it. */
 export function listConnections(db: Database, vaultId: number): ConnectionRow[] {
   const clients = db
-    .query<ClientRow, [number]>(
-      `SELECT c.client_id, c.client_name, c.redirect_uris, c.logo_uri, c.created_at, k.consented_at
+    .query<ClientRow & { label: string | null }, [number]>(
+      `SELECT c.client_id, c.client_name, c.redirect_uris, c.logo_uri, c.software_id, c.software_version, c.client_uri,
+              c.created_at, k.consented_at, k.label
        FROM oauth_clients c JOIN oauth_consents k ON k.client_id = c.client_id
        WHERE k.vault_id = ? ORDER BY k.consented_at DESC`,
     )
     .all(vaultId);
-  return clients.map((client) => ({
-    ...client,
-    grants: db
-      .query<{ id: string; created_at: number; last_used_at: number | null; access_expires_at: number }, [string, number]>(
-        "SELECT id, created_at, last_used_at, access_expires_at FROM oauth_grants WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL ORDER BY created_at DESC",
+  return clients.map((client) => {
+    const grants = db
+      .query<GrantSummary, [string, number]>(
+        `SELECT id, created_at, last_used_at, access_expires_at, mcp_client_name, mcp_client_version FROM oauth_grants
+         WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL ORDER BY COALESCE(last_used_at, created_at) DESC`,
       )
-      .all(client.client_id, vaultId),
-  }));
+      .all(client.client_id, vaultId);
+    const seen = grants.find((g) => g.mcp_client_name);
+    return { ...client, grants, display_name: connectionName(client.label, { ...client, ...seen }) };
+  });
+}
+
+/** Set (or clear, with null) the owner's label for a client on one vault. */
+export function setConnectionLabel(db: Database, clientId: string, vaultId: number, label: string | null): boolean {
+  return db.query("UPDATE oauth_consents SET label = ? WHERE client_id = ? AND vault_id = ?").run(label, clientId, vaultId).changes > 0;
 }
 
 /** Revoke a client's access to one vault. The registration itself goes once no vault is left approved. */
