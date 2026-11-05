@@ -2,6 +2,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { VaultPathError } from "../vault/paths.ts";
 import { VaultError } from "../vault/store.ts";
 import { SearchError } from "../vault/search.ts";
+import { SnapshotRefError } from "../snapshots/snapshotter.ts";
+import { BaseEditError } from "../vault/bases.ts";
 
 /** Successful tool result: JSON payload rendered as text. */
 export function ok(payload: unknown): CallToolResult {
@@ -27,6 +29,8 @@ export function guarded<A extends unknown[]>(
       if (err instanceof VaultError) return fail(err.code, err.message);
       if (err instanceof VaultPathError) return fail(err.code, err.message);
       if (err instanceof SearchError) return fail("SEARCH_ERROR", err.message);
+      if (err instanceof SnapshotRefError) return fail("BAD_REF", err.message);
+      if (err instanceof BaseEditError) return fail(err.code, err.message);
       if (err instanceof Error) return fail("INTERNAL", err.message);
       return fail("INTERNAL", String(err));
     }

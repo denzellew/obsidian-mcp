@@ -1,7 +1,8 @@
 import { Layout } from "../layout.tsx";
 import type { ClientRow } from "../../oauth/router.ts";
+import { MAX_LABEL_CHARS } from "../../oauth/identity.ts";
 
-export function ConsentPage(props: { client: ClientRow; vaultName: string; params: Record<string, string> }) {
+export function ConsentPage(props: { client: ClientRow; vaultName: string; params: Record<string, string>; suggestedLabel: string }) {
   const redirectHost = (() => {
     try {
       return new URL(props.params.redirect_uri ?? "").host;
@@ -25,10 +26,26 @@ export function ConsentPage(props: { client: ClientRow; vaultName: string; param
           After approval you will be sent to <span class="font-mono">{redirectHost}</span>. Approving remembers this
           client for this vault only; revoke it anytime under Connections.
         </p>
-        <form method="post" action="/oauth/consent" class="flex gap-3">
-          {Object.entries(props.params).map(([k, v]) => (
-            <input type="hidden" name={k} value={v} />
-          ))}
+        <form method="post" action="/oauth/consent" class="space-y-4">
+          {Object.entries(props.params)
+            .filter(([k]) => k !== "label")
+            .map(([k, v]) => (
+              <input type="hidden" name={k} value={v} />
+            ))}
+          <label class="block">
+            <span class="mb-1 block text-sm text-text-muted">Name this connection</span>
+            <input
+              type="text"
+              name="label"
+              value={props.suggestedLabel}
+              maxlength={MAX_LABEL_CHARS}
+              class="w-full rounded-md border border-base-600 bg-base-950 px-3 py-2 text-sm"
+            />
+            <span class="mt-1 block text-xs text-text-muted">
+              Shown in Connections and the audit log, so you can tell clients apart. You can rename it later.
+            </span>
+          </label>
+          <div class="flex gap-3">
           <button
             type="submit"
             name="decision"
@@ -45,6 +62,7 @@ export function ConsentPage(props: { client: ClientRow; vaultName: string; param
           >
             Deny
           </button>
+          </div>
         </form>
       </div>
     </Layout>

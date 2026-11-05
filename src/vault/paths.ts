@@ -86,11 +86,20 @@ export function resolveAbsolute(vaultDir: string, relPath: string): string {
   return abs;
 }
 
-/** Append ".md" when the path has no file extension (notes addressed without one). */
-export function withMdExtension(relPath: string): string {
+/** Append `ext` when the path has no file extension. */
+export function withExtension(relPath: string, ext: string): string {
   const base = relPath.split("/").pop() ?? "";
   if (base.includes(".") && !base.startsWith(".")) return relPath;
-  return `${relPath}.md`;
+  return `${relPath}${ext}`;
+}
+
+/** Append ".md" when the path has no file extension (notes addressed without one). */
+export function withMdExtension(relPath: string): string {
+  return withExtension(relPath, ".md");
+}
+
+export function isBase(relPath: string): boolean {
+  return relPath.toLowerCase().endsWith(".base");
 }
 
 export function isMarkdown(relPath: string): boolean {

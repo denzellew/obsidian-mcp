@@ -9,7 +9,7 @@ import { openDatabase } from "../src/db/index.ts";
 import { createApiToken, listApiTokens } from "../src/auth/tokens.ts";
 import { createSession } from "../src/auth/sessions.ts";
 import { resetRateLimits, SESSION_COOKIE } from "../src/auth/middleware.ts";
-import { recordAdmin } from "../src/audit.ts";
+import { recordAdmin, recordMcpCall } from "../src/audit.ts";
 import { VaultRegistry, type VaultInstance } from "../src/vaults/registry.ts";
 import { VAULT_COOKIE } from "../src/web/vault-context.tsx";
 
@@ -167,6 +167,62 @@ describe("scoped pages", () => {
     expect(html).toContain("server-wide-passkey");
     expect(html).not.toContain("only-in-default");
     expect(token.token).toStartWith("obmcp_");
+  });
+
+  test("tools page lists every MCP tool with badges, params and this vault's usage", async () => {
+    const principal = { kind: "static" as const, id: "tok", name: "t", vaultId: personal.id };
+    recordMcpCall(db, principal, "read_note", { path: "a" }, "ok");
+    recordMcpCall(db, principal, "read_note", { path: "b" }, "error", "NOT_FOUND");
+    recordMcpCall(db, { ...principal, vaultId: def.id }, "edit_note", { path: "x" }, "ok"); // other vault
+
+    const html = await (await fetch(`${base}/app/tools`, { headers: { Cookie: as("personal") } })).text();
+    for (const name of ["read_note", "edit_note", "manage_base", "vault_diff", "snapshot_history", "vault_info"]) {
+      expect(html).toContain(`id="tool-${name}"`);
+    }
+    expect(html).toContain("14 tools available");
+    expect(html).toContain('href="/app/tools"');
+    const card = (name: string) => html.slice(html.indexOf(`id="tool-${name}"`)).split('id="tool-')[1]!;
+    expect(card("read_note")).toContain("read-only");
+    expect(card("read_note")).toContain("2 calls · 1 error");
+    expect(card("edit_note")).toContain("destructive");
+    expect(card("edit_note")).toContain("unused in 30d");
+    expect(card("edit_note")).toContain("expected_hash");
+    expect(html).toContain("Server instructions");
+  });
+
+  test("connections show auto names and can be renamed per vault", async () => {
+    db.query(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, consented_at) VALUES ('obcl_named', 'Claude', '[\"https://claude.ai/cb\"]', unixepoch())",
+    ).run();
+    db.query("INSERT INTO oauth_consents (client_id, vault_id) VALUES ('obcl_named', ?)").run(personal.id);
+    const headers = { Cookie: as("personal"), Origin: base, "HX-Request": "true", "X-Vault": "personal", "Content-Type": "application/x-www-form-urlencoded" };
+
+    let html = await (await fetch(`${base}/app/connections`, { headers: { Cookie: as("personal") } })).text();
+    expect(html).toContain("Claude · claude.ai");
+    expect(html).toContain("registered as &quot;Claude&quot;");
+
+    html = await (await fetch(`${base}/app/connections/obcl_named/label`, { method: "PUT", headers, body: "label=Phone" })).text();
+    expect(html).toContain("Phone");
+    const audit = db.query<{ target: string }, []>("SELECT target FROM audit_log WHERE event = 'oauth.rename' ORDER BY id DESC LIMIT 1").get()!;
+    expect(audit.target).toBe("Claude · claude.ai → Phone");
+
+    // a later re-registration of the same app joins the group and shows under its name
+    db.query(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, consented_at) VALUES ('obcl_named2', 'Claude', '[\"https://claude.ai/cb\"]', unixepoch())",
+    ).run();
+    db.query("INSERT INTO oauth_consents (client_id, vault_id) VALUES ('obcl_named2', ?)").run(personal.id);
+    html = await (await fetch(`${base}/app/connections`, { headers: { Cookie: as("personal") } })).text();
+    expect(html.match(/>Phone</g)).toHaveLength(1);
+    expect(html).toContain("2 registrations");
+
+    // blank clears the label for the whole app → auto name again
+    await fetch(`${base}/app/connections/obcl_named2/label`, { method: "PUT", headers, body: "label=" });
+    const labels = db.query<{ label: string | null }, []>("SELECT label FROM oauth_consents WHERE client_id LIKE 'obcl_named%'").all();
+    expect(labels.map((l) => l.label)).toEqual([null, null]);
+
+    // revoking the connection revokes every registration of it
+    await fetch(`${base}/app/connections/obcl_named2`, { method: "DELETE", headers });
+    expect(db.query("SELECT 1 FROM oauth_consents WHERE client_id LIKE 'obcl_named%'").get()).toBeNull();
   });
 
   test("connections list and revoke only the selected vault's consent", async () => {

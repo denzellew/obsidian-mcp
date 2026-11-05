@@ -6,6 +6,7 @@ import { abortRegistry, hashToken, mintToken } from "../auth/tokens.ts";
 import { isRegistrableRedirectUri, pkceChallengeFromVerifier, redirectUriMatches } from "./policy.ts";
 import { ConsentPage, OAuthErrorPage } from "../web/routes/consent.tsx";
 import { recordAdmin } from "../audit.ts";
+import { connectionName, describeClient, identityKey, normalizeLabel } from "./identity.ts";
 import { logger } from "../log.ts";
 import type { VaultInstance, VaultRegistry } from "../vaults/registry.ts";
 
@@ -22,6 +23,9 @@ export interface ClientRow {
   client_name: string;
   redirect_uris: string;
   logo_uri: string | null;
+  software_id: string | null;
+  software_version: string | null;
+  client_uri: string | null;
   created_at: number;
   consented_at: number | null;
 }
@@ -127,12 +131,10 @@ export function oauthPublicRouter(db: Database, vaults: VaultRegistry): Hono<Aut
     const clientId = `obcl_${randomBytes(15).toString("base64url")}`;
     const clientName = typeof body.client_name === "string" && body.client_name.trim() ? body.client_name.trim().slice(0, 100) : "Unnamed client";
     const logoUri = typeof body.logo_uri === "string" ? body.logo_uri.slice(0, 500) : null;
-    db.query("INSERT INTO oauth_clients (client_id, client_name, redirect_uris, logo_uri) VALUES (?, ?, ?, ?)").run(
-      clientId,
-      clientName,
-      JSON.stringify(redirectUris),
-      logoUri,
-    );
+    const meta = (k: string, max: number) => (typeof body[k] === "string" && body[k].trim() ? (body[k] as string).trim().slice(0, max) : null);
+    db.query(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, logo_uri, software_id, software_version, client_uri) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(clientId, clientName, JSON.stringify(redirectUris), logoUri, meta("software_id", 100), meta("software_version", 50), meta("client_uri", 500));
     log.info(`registered OAuth client '${clientName}' (${clientId})`);
     return c.json(
       {
@@ -369,7 +371,14 @@ export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hon
     if (hasConsent(db, v.params.client_id, v.params.vault.id)) {
       return c.redirect(issueCodeAndRedirect(db, v.params));
     }
-    return c.html(ConsentPage({ client: v.client, vaultName: v.params.vault.name, params: q }));
+    return c.html(
+      ConsentPage({
+        client: v.client,
+        vaultName: v.params.vault.name,
+        params: q,
+        suggestedLabel: labelForIdentity(db, v.params.vault.id, identityKey(v.client)) ?? describeClient(v.client),
+      }),
+    );
   });
 
   app.post("/consent", async (c) => {
@@ -391,8 +400,15 @@ export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hon
       return c.redirect(u.toString());
     }
     db.query("UPDATE oauth_clients SET consented_at = unixepoch() WHERE client_id = ?").run(v.params.client_id);
-    db.query("INSERT OR REPLACE INTO oauth_consents (client_id, vault_id) VALUES (?, ?)").run(v.params.client_id, v.params.vault.id);
-    recordAdmin(db, "oauth.consent", { target: v.client.client_name, vaultId: v.params.vault.id });
+    const vaultId = v.params.vault.id;
+    const key = identityKey(v.client);
+    // No field (non-browser callers) → keep the name already used for this app.
+    // Submitting the auto name unchanged stores no label, so it stays auto.
+    let label = "label" in body ? normalizeLabel(body.label) : labelForIdentity(db, vaultId, key);
+    if (label === describeClient(v.client)) label = null;
+    db.query("INSERT OR REPLACE INTO oauth_consents (client_id, vault_id, label) VALUES (?, ?, ?)").run(v.params.client_id, vaultId, label);
+    setIdentityLabel(db, vaultId, key, label);
+    recordAdmin(db, "oauth.consent", { target: connectionName(label, v.client), vaultId });
     return c.redirect(issueCodeAndRedirect(db, v.params));
   });
 
@@ -402,27 +418,89 @@ export function oauthInteractiveRouter(db: Database, vaults: VaultRegistry): Hon
 // ---------------------------------------------------------------------------
 // Management queries for the UI
 
-export interface ConnectionRow extends ClientRow {
-  grants: { id: string; created_at: number; last_used_at: number | null; access_expires_at: number }[];
+export interface GrantSummary {
+  id: string;
+  created_at: number;
+  last_used_at: number | null;
+  access_expires_at: number;
+  mcp_client_name: string | null;
+  mcp_client_version: string | null;
 }
 
-/** Clients approved for one vault, with their live grants for it. */
-export function listConnections(db: Database, vaultId: number): ConnectionRow[] {
+interface ConsentedClient extends ClientRow {
+  label: string | null;
+  grants: GrantSummary[];
+  /** Most recent activity: last grant use, else grant creation, else approval. */
+  last_active: number;
+}
+
+/**
+ * One app as the owner sees it: every client_id that shares an identity key
+ * on this vault, presented as the most recently used one.
+ */
+export interface ConnectionRow extends ConsentedClient {
+  key: string;
+  /** label, or the auto-derived name using the latest MCP clientInfo seen. */
+  display_name: string;
+  /** All client_ids in the group, most recently active first. */
+  client_ids: string[];
+}
+
+function consentedClients(db: Database, vaultId: number): ConsentedClient[] {
   const clients = db
-    .query<ClientRow, [number]>(
-      `SELECT c.client_id, c.client_name, c.redirect_uris, c.logo_uri, c.created_at, k.consented_at
+    .query<ClientRow & { label: string | null }, [number]>(
+      `SELECT c.client_id, c.client_name, c.redirect_uris, c.logo_uri, c.software_id, c.software_version, c.client_uri,
+              c.created_at, k.consented_at, k.label
        FROM oauth_clients c JOIN oauth_consents k ON k.client_id = c.client_id
-       WHERE k.vault_id = ? ORDER BY k.consented_at DESC`,
+       WHERE k.vault_id = ?`,
     )
     .all(vaultId);
-  return clients.map((client) => ({
-    ...client,
-    grants: db
-      .query<{ id: string; created_at: number; last_used_at: number | null; access_expires_at: number }, [string, number]>(
-        "SELECT id, created_at, last_used_at, access_expires_at FROM oauth_grants WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL ORDER BY created_at DESC",
+  return clients.map((client) => {
+    const grants = db
+      .query<GrantSummary, [string, number]>(
+        `SELECT id, created_at, last_used_at, access_expires_at, mcp_client_name, mcp_client_version FROM oauth_grants
+         WHERE client_id = ? AND vault_id = ? AND revoked_at IS NULL ORDER BY COALESCE(last_used_at, created_at) DESC`,
       )
-      .all(client.client_id, vaultId),
-  }));
+      .all(client.client_id, vaultId);
+    const last_active = Math.max(client.consented_at ?? 0, ...grants.map((g) => g.last_used_at ?? g.created_at));
+    return { ...client, grants, last_active };
+  });
+}
+
+/** Connections for one vault, grouped by identity key, most recently used first. */
+export function listConnections(db: Database, vaultId: number): ConnectionRow[] {
+  const groups = new Map<string, ConsentedClient[]>();
+  for (const c of consentedClients(db, vaultId).sort((a, b) => b.last_active - a.last_active)) {
+    const key = identityKey(c);
+    groups.set(key, [...(groups.get(key) ?? []), c]);
+  }
+  return [...groups.entries()].map(([key, members]) => {
+    const latest = members[0]!;
+    const grants = members.flatMap((m) => m.grants);
+    const label = members.find((m) => m.label)?.label ?? null;
+    const seen = grants.find((g) => g.mcp_client_name);
+    return {
+      ...latest,
+      key,
+      label,
+      grants,
+      client_ids: members.map((m) => m.client_id),
+      display_name: connectionName(label, { ...latest, mcp_client_name: seen?.mcp_client_name, mcp_client_version: seen?.mcp_client_version }),
+    };
+  });
+}
+
+/** The owner's name for an app on this vault, from its most recently active registration. */
+export function labelForIdentity(db: Database, vaultId: number, key: string): string | null {
+  return listConnections(db, vaultId).find((g) => g.key === key)?.label ?? null;
+}
+
+/** Apply a label (null = auto) to every registration of an app on this vault. */
+export function setIdentityLabel(db: Database, vaultId: number, key: string, label: string | null): number {
+  const ids = consentedClients(db, vaultId).filter((c) => identityKey(c) === key).map((c) => c.client_id);
+  const stmt = db.query("UPDATE oauth_consents SET label = ? WHERE client_id = ? AND vault_id = ?");
+  db.transaction(() => ids.forEach((id) => stmt.run(label, id, vaultId)))();
+  return ids.length;
 }
 
 /** Revoke a client's access to one vault. The registration itself goes once no vault is left approved. */

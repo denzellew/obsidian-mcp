@@ -6,7 +6,8 @@ import { guarded, ok, fail } from "../respond.ts";
 import { notePayload, resolveExistingNote } from "../note-io.ts";
 import { findSection } from "../../vault/markdown.ts";
 import { parseNote } from "../../vault/frontmatter.ts";
-import { isImage, isMarkdown } from "../../vault/paths.ts";
+import { isBase, isImage, isMarkdown } from "../../vault/paths.ts";
+import { BaseEditError, parseBaseDoc, summarizeBase, validateBase } from "../../vault/bases.ts";
 
 const MAX_IMAGE_BYTES = 1_500_000;
 
@@ -30,7 +31,7 @@ export function registerReadNote(server: McpServer, ctx: VaultContext) {
         "Read one or more notes: parsed frontmatter, markdown body, and a `hash` you MUST keep if you plan to edit — pass it as expected_hash to edit_note/manage_note since this vault can change underneath you (Obsidian Sync runs continuously). " +
         "`path` accepts a vault-relative path ('Projects/Foo.md', '.md' optional) or a bare wikilink target ('Foo'), resolved the way Obsidian resolves [[Foo]]. " +
         "For large notes use mode:'outline' (headings only, cheap) then mode:'section' with `heading` to read one section. Use `paths` to batch-read up to 10 notes in one call. " +
-        "Image attachments are returned as viewable images; other binaries return metadata only.",
+        "Obsidian Bases (.base) return their YAML, parsed structure, and hash (edit them with manage_base). Image attachments are returned as viewable images; other binaries return metadata only.",
       inputSchema: {
         path: z.string().optional().describe("Vault-relative path or wikilink target. Mutually exclusive with `paths`."),
         paths: z.array(z.string()).max(10).optional().describe("Batch read up to 10 notes."),
@@ -59,6 +60,30 @@ export function registerReadNote(server: McpServer, ctx: VaultContext) {
       }
 
       const rel = await resolveExistingNote(ctx, args.path!);
+
+      if (isBase(rel)) {
+        const file = await ctx.store.readText(rel);
+        let base: unknown = null;
+        let problems: string[];
+        try {
+          base = parseBaseDoc(file.text).toJS();
+          problems = validateBase(base);
+        } catch (err) {
+          if (!(err instanceof BaseEditError)) throw err;
+          problems = [err.message];
+        }
+        return ok({
+          path: rel,
+          type: "base",
+          hash: file.hash,
+          yaml: file.text,
+          base,
+          summary: summarizeBase(base),
+          ...(problems.length ? { problems } : {}),
+          stat: file.stat,
+          note: "Edit with manage_base (action:'edit') passing this hash as expected_hash.",
+        });
+      }
 
       if (!isMarkdown(rel)) {
         if (isImage(rel)) {

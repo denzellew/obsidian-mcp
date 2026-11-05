@@ -20,6 +20,7 @@ let snapsDir: string;
 let server: ReturnType<typeof Bun.serve>;
 let client: Client;
 let snapshotter: Snapshotter;
+let db: ReturnType<typeof openDatabase>;
 
 function textOf(result: CallToolResult): string {
   const block = result.content.find((c) => c.type === "text");
@@ -33,7 +34,7 @@ function jsonOf(result: CallToolResult): any {
 beforeAll(async () => {
   vault = fixtureVault();
   snapsDir = mkdtempSync(join(tmpdir(), "obmcp-snaps-"));
-  const db = openDatabase(":memory:");
+  db = openDatabase(":memory:");
   const store = new VaultStore(vault.dir);
   const links = new LinkIndex(store);
   snapshotter = new Snapshotter(snapsDir, vault.dir, { debounceMs: 50, maxWaitMs: 500, intervalMs: 600_000 });
@@ -67,7 +68,7 @@ afterAll(async () => {
 });
 
 describe("MCP integration", () => {
-  test("lists all 11 tools with annotations", async () => {
+  test("lists all 14 tools with annotations", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
@@ -77,16 +78,26 @@ describe("MCP integration", () => {
       "edit_note",
       "get_links",
       "list_tags",
+      "manage_base",
       "manage_note",
       "read_note",
       "search_vault",
+      "snapshot_history",
       "vault_config",
+      "vault_diff",
       "vault_info",
     ]);
     const read = tools.find((t) => t.name === "read_note")!;
     expect(read.annotations?.readOnlyHint).toBe(true);
     const edit = tools.find((t) => t.name === "edit_note")!;
     expect(edit.annotations?.destructiveHint).toBe(true);
+  });
+
+  test("initialize records the MCP client on the token", () => {
+    const row = db.query<{ mcp_client_name: string; mcp_client_version: string }, []>(
+      "SELECT mcp_client_name, mcp_client_version FROM api_tokens WHERE name = 'integration-test'",
+    ).get()!;
+    expect(row).toEqual({ mcp_client_name: "test-client", mcp_client_version: "0.0.0" });
   });
 
   test("vault_info reports config and counts", async () => {
@@ -333,6 +344,119 @@ describe("MCP integration", () => {
     const commits = await snapshotter.listCommits(100);
     expect(commits.length).toBeGreaterThanOrEqual(2);
     expect(commits.some((c) => c.message.startsWith("pre-op: move"))).toBe(true);
+  });
+
+  test("vault_diff shows unsnapshotted changes, snapshot_history + commit diff", async () => {
+    await snapshotter.flush();
+    // edit outside the MCP (as Sync would) — no snapshot is triggered
+    vault.write("Synced Note.md", "line one\nfrom another device\n");
+    const wt = jsonOf((await client.callTool({ name: "vault_diff", arguments: {} })) as CallToolResult);
+    expect(wt.to).toBe("working tree");
+    expect(wt.files).toContainEqual({ path: "Synced Note.md", status: "A", additions: 2, deletions: 0 });
+    expect(wt.patch).toContain("+from another device");
+
+    const stat = jsonOf((await client.callTool({ name: "vault_diff", arguments: { stat_only: true } })) as CallToolResult);
+    expect(stat.patch).toBeUndefined();
+
+    const small = jsonOf((await client.callTool({ name: "vault_diff", arguments: { max_chars: 500 } })) as CallToolResult);
+    if (wt.patch.length > 500) expect(small.truncated).toBe(true);
+
+    await snapshotter.commit("sync: Synced Note");
+    const hist = jsonOf(
+      (await client.callTool({ name: "snapshot_history", arguments: { path: "Synced Note", include_files: true } })) as CallToolResult,
+    );
+    expect(hist.path).toBe("Synced Note.md");
+    expect(hist.commits[0].message).toBe("sync: Synced Note");
+    expect(hist.commits[0].files).toEqual(["Synced Note.md"]);
+
+    const one = jsonOf(
+      (await client.callTool({ name: "vault_diff", arguments: { commit: hist.commits[0].sha } })) as CallToolResult,
+    );
+    expect(one.files.map((f: any) => f.path)).toEqual(["Synced Note.md"]);
+    expect(one.patch).toContain("+line one");
+
+    const clean = jsonOf((await client.callTool({ name: "vault_diff", arguments: {} })) as CallToolResult);
+    expect(clean.files).toEqual([]);
+  });
+
+  test("vault_diff rejects bad refs with a teaching error", async () => {
+    const r = (await client.callTool({ name: "vault_diff", arguments: { from: "--output=/tmp/x" } })) as CallToolResult;
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain("BAD_REF");
+    expect(textOf(r)).toContain("snapshot_history");
+  });
+
+  test("manage_base: create → read_note → edit → stale/invalid errors", async () => {
+    const call = async (name: string, args: Record<string, unknown>) =>
+      (await client.callTool({ name, arguments: args })) as CallToolResult;
+
+    const created = jsonOf(await call("manage_base", { action: "create", path: "Bases/Projects", filters: 'file.inFolder("Projects")' }));
+    expect(created.path).toBe("Bases/Projects.base");
+    expect(created.summary.views).toEqual([{ name: "Table", type: "table" }]);
+    expect(created.embed).toBe("![[Projects.base]]");
+
+    const dup = await call("manage_base", { action: "create", path: "Bases/Projects" });
+    expect(dup.isError).toBe(true);
+    expect(textOf(dup)).toContain("ALREADY_EXISTS");
+    expect(jsonOf(await call("manage_base", { action: "create", path: "Bases/Projects", if_exists: "unique" })).path).toBe("Bases/Projects 1.base");
+
+    const badCreate = await call("manage_base", { action: "create", path: "Bases/Bad", filters: { xor: ["a"] } });
+    expect(badCreate.isError).toBe(true);
+    expect(textOf(badCreate)).toContain("INVALID_BASE");
+
+    const read = jsonOf(await call("read_note", { path: "Bases/Projects.base" }));
+    expect(read.type).toBe("base");
+    expect(read.base.filters).toBe('file.inFolder("Projects")');
+    expect(read.problems).toBeUndefined();
+
+    const edited = jsonOf(
+      await call("manage_base", {
+        action: "edit",
+        path: "Projects", // bare name resolves
+        expected_hash: read.hash,
+        edits: [
+          { type: "set_formula", name: "age", expression: "(now() - file.ctime) / 86400000" },
+          { type: "add_view", view: { type: "cards", name: "Active", filters: 'status == "active"' } },
+          { type: "update_view", name: "Table", set: { order: ["file.name", "note.status", "formula.age"] } },
+        ],
+      }),
+    );
+    expect(edited.path).toBe("Bases/Projects.base");
+    expect(edited.summary.views.map((v: any) => v.name)).toEqual(["Table", "Active"]);
+    expect(edited.summary.formulas).toEqual(["age"]);
+
+    const stale = await call("manage_base", {
+      action: "edit",
+      path: "Bases/Projects.base",
+      expected_hash: read.hash,
+      edits: [{ type: "remove_view", name: "Active" }],
+    });
+    expect(stale.isError).toBe(true);
+    expect(textOf(stale)).toContain("STALE_NOTE");
+
+    const invalid = await call("manage_base", {
+      action: "edit",
+      path: "Bases/Projects.base",
+      expected_hash: edited.hash,
+      edits: [{ type: "update_view", name: "Active", set: { type: "kanban" } }],
+    });
+    expect(invalid.isError).toBe(true);
+    expect(textOf(invalid)).toContain("INVALID_BASE");
+    expect(jsonOf(await call("read_note", { path: "Bases/Projects.base" })).hash).toBe(edited.hash); // unchanged
+
+    const noHash = await call("manage_base", { action: "edit", path: "Bases/Projects.base", edits: [{ type: "replace_yaml", yaml: "views: []" }] });
+    expect(textOf(noHash)).toContain("requires expected_hash");
+
+    const missing = await call("manage_base", { action: "edit", path: "Nope", edits: [{ type: "remove_view", name: "x" }] });
+    expect(textOf(missing)).toContain("Bases/Projects.base");
+
+    const viaEditNote = await call("edit_note", { path: "Bases/Projects.base", edits: [{ type: "append", content: "x" }] });
+    expect(textOf(viaEditNote)).toContain("manage_base");
+    expect(textOf(await call("create_note", { path: "X.base" }))).toContain("manage_base");
+
+    await snapshotter.flush();
+    const commits = await snapshotter.listCommits(20, "Bases/Projects.base");
+    expect(commits.some((c) => c.message === "mcp: manage_base edit Bases/Projects.base")).toBe(true);
   });
 
   test("resources: vault root and note template", async () => {

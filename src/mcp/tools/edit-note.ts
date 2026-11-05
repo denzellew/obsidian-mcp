@@ -5,7 +5,7 @@ import { guarded, ok, fail } from "../respond.ts";
 import { notePayload, resolveExistingNote } from "../note-io.ts";
 import { parseNote, patchFrontmatter } from "../../vault/frontmatter.ts";
 import { appendUnderHeading, replaceSection } from "../../vault/markdown.ts";
-import { isMarkdown } from "../../vault/paths.ts";
+import { isBase, isMarkdown } from "../../vault/paths.ts";
 
 const EditSchema = z.discriminatedUnion("type", [
   z.object({
@@ -61,6 +61,7 @@ export function registerEditNote(server: McpServer, ctx: VaultContext) {
     },
     guarded(async (args) => {
       const rel = await resolveExistingNote(ctx, args.path);
+      if (isBase(rel)) return fail("BINARY_FILE", `${rel} is an Obsidian Base; edit it with manage_base (action:'edit').`);
       if (!isMarkdown(rel)) return fail("BINARY_FILE", `${rel} is not a markdown note; edit_note only works on .md files.`);
 
       if (!args.expected_hash && args.edits.some((e) => e.type === "replace_content")) {

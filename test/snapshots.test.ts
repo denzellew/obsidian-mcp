@@ -94,6 +94,62 @@ describe("Snapshotter", () => {
     const commits = await snap.listCommits();
     expect(commits[0]!.message).toBe("shutdown");
   });
+  test("diff of working tree includes untracked files without touching the real index", async () => {
+    vault.write("a.md", "alpha\nmore\n");
+    vault.write("new.md", "fresh\n");
+    const d = await snap.diff();
+    expect(d.to).toBeNull();
+    expect(d.files).toEqual([
+      { path: "a.md", status: "M", additions: 1, deletions: 0 },
+      { path: "new.md", status: "A", additions: 1, deletions: 0 },
+    ]);
+    expect(d.patch).toContain("+fresh");
+    // excluded paths never appear
+    vault.write(".trash/y.md", "junk");
+    expect((await snap.diff()).files.some((f) => f.path.startsWith(".trash/"))).toBe(false);
+    // real index untouched: the next commit still captures both files
+    const sha = await snap.commit("after diff");
+    expect(await snap.commitFiles(sha!)).toEqual(["a.md", "new.md"]);
+    expect((await snap.diff()).files).toEqual([]);
+  });
+
+  test("diff between snapshots, single commit, root commit, path filter", async () => {
+    const root = (await snap.listCommits())[0]!.sha;
+    vault.write("a.md", "ALPHA\n");
+    vault.write("b.md", "bravo\n");
+    const second = (await snap.commit("second"))!;
+
+    const between = await snap.diff({ from: root, to: second });
+    expect(between.files.map((f) => f.path)).toEqual(["a.md", "b.md"]);
+    expect(between.patch).toContain("-alpha");
+
+    const filtered = await snap.diff({ from: root.slice(0, 8), to: "HEAD", path: "b.md" });
+    expect(filtered.files.map((f) => f.path)).toEqual(["b.md"]);
+
+    const one = await snap.diff({ commit: second });
+    expect(one.files.map((f) => f.path)).toEqual(["a.md", "b.md"]);
+
+    const rootDiff = await snap.diff({ commit: root });
+    expect(rootDiff.files).toEqual([{ path: "a.md", status: "A", additions: 1, deletions: 0 }]);
+
+    const prev = await snap.diff({ from: "HEAD~1", to: "HEAD" });
+    expect(prev.to).toBe(second);
+  });
+
+  test("diff reports renames", async () => {
+    vault.write("long.md", "one\ntwo\nthree\nfour\nfive\n");
+    await snap.commit("add long");
+    const { renameSync } = await import("node:fs");
+    renameSync(join(vault.dir, "long.md"), join(vault.dir, "moved.md"));
+    const d = await snap.diff();
+    expect(d.files).toEqual([{ path: "moved.md", status: "R", from_path: "long.md", additions: 0, deletions: 0 }]);
+  });
+
+  test("diff rejects option-like and unknown refs", async () => {
+    expect(snap.diff({ from: "--output=/tmp/x" })).rejects.toThrow("not a valid snapshot ref");
+    expect(snap.diff({ to: "HEAD:../../etc" })).rejects.toThrow("not a valid snapshot ref");
+    expect(snap.diff({ from: "deadbeef" })).rejects.toThrow("not found");
+  });
 });
 
 describe("retention", () => {

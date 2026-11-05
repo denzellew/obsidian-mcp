@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import type { Database } from "bun:sqlite";
 import { Layout, Card } from "../layout.tsx";
 import type { AuthEnv } from "../../auth/middleware.ts";
-import { listConnections, revokeClient, type ConnectionRow } from "../../oauth/router.ts";
+import { listConnections, revokeClient, setIdentityLabel, type ConnectionRow } from "../../oauth/router.ts";
+import { MAX_LABEL_CHARS, mcpClientLabel, normalizeLabel, redirectHint } from "../../oauth/identity.ts";
 import { recordAdmin } from "../../audit.ts";
 
 function ago(unix: number | null): string {
@@ -12,6 +13,18 @@ function ago(unix: number | null): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+/** What the client itself reported, so the owner can tell same-named clients apart. */
+function details(conn: ConnectionRow): string {
+  const parts = [`registered as "${conn.client_name}"`];
+  const hint = redirectHint(conn.redirect_uris);
+  if (hint) parts.push(`redirects to ${hint}`);
+  const clients = [...new Set(conn.grants.map((g) => mcpClientLabel(g.mcp_client_name, g.mcp_client_version)).filter(Boolean))];
+  if (clients.length) parts.push(`MCP client ${clients.join(", ")}`);
+  if (conn.software_id) parts.push(`software ${conn.software_id}${conn.software_version ? ` ${conn.software_version}` : ""}`);
+  if (conn.client_ids.length > 1) parts.push(`${conn.client_ids.length} registrations, showing the most recent`);
+  return parts.join(" · ");
 }
 
 function ConnectionList(props: { connections: ConnectionRow[] }) {
@@ -24,27 +37,45 @@ function ConnectionList(props: { connections: ConnectionRow[] }) {
   }
   return (
     <div class="space-y-4">
-      {props.connections.map((conn) => (
-        <div class="rounded-md border border-base-700 bg-base-950 p-4">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="font-medium">{conn.client_name}</p>
-              <p class="text-xs text-text-muted">
-                Approved {ago(conn.consented_at)} · {conn.grants.length} active grant{conn.grants.length === 1 ? "" : "s"}
-                {conn.grants[0] ? ` · last used ${ago(conn.grants[0].last_used_at)}` : ""}
-              </p>
+      {props.connections.map((conn) => {
+        const id = encodeURIComponent(conn.client_id);
+        return (
+          <div class="rounded-md border border-base-700 bg-base-950 p-4">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <p class="font-medium">{conn.display_name}</p>
+                <p class="text-xs text-text-muted">{details(conn)}</p>
+                <p class="text-xs text-text-muted">
+                  Approved {ago(conn.consented_at)} · {conn.grants.length} active grant{conn.grants.length === 1 ? "" : "s"}
+                  {conn.grants[0] ? ` · last used ${ago(conn.grants[0].last_used_at)}` : ""}
+                </p>
+              </div>
+              <button
+                hx-delete={`/app/connections/${id}`}
+                hx-confirm={`Revoke '${conn.display_name}'? It must re-authorize to reconnect.`}
+                hx-target="#connection-list"
+                class="shrink-0 text-sm text-danger hover:underline"
+              >
+                Revoke
+              </button>
             </div>
-            <button
-              hx-delete={`/app/connections/${encodeURIComponent(conn.client_id)}`}
-              hx-confirm={`Revoke '${conn.client_name}'? It must re-authorize to reconnect.`}
-              hx-target="#connection-list"
-              class="text-sm text-danger hover:underline"
-            >
-              Revoke
-            </button>
+            <form hx-put={`/app/connections/${id}/label`} hx-target="#connection-list" class="mt-3 flex gap-2">
+              <input
+                type="text"
+                name="label"
+                value={conn.label ?? ""}
+                placeholder={conn.label ? "" : `${conn.display_name} (auto)`}
+                maxlength={MAX_LABEL_CHARS}
+                aria-label="Connection name"
+                class="min-w-0 flex-1 rounded-md border border-base-600 bg-base-900 px-2 py-1 text-sm"
+              />
+              <button type="submit" class="rounded-md border border-base-600 px-3 py-1 text-sm text-text-muted hover:text-text">
+                Rename
+              </button>
+            </form>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -67,13 +98,33 @@ export function connectionsRouter(db: Database): Hono<AuthEnv> {
     ),
   );
 
+  const groupOf = (vaultId: number, clientId: string) =>
+    listConnections(db, vaultId).find((conn) => conn.client_ids.includes(clientId));
+
+  // Names the app, not one registration: later re-registrations inherit it.
+  // A blank label clears it, falling back to the auto-derived name.
+  app.put("/:clientId/label", async (c) => {
+    const clientId = decodeURIComponent(c.req.param("clientId"));
+    const vaultId = c.var.vault!.id;
+    const before = groupOf(vaultId, clientId);
+    if (before) {
+      const body = await c.req.parseBody();
+      const label = normalizeLabel(body.label);
+      if (label !== before.label && setIdentityLabel(db, vaultId, before.key, label)) {
+        const after = groupOf(vaultId, clientId);
+        recordAdmin(db, "oauth.rename", { target: `${before.display_name} → ${after?.display_name ?? label}`, vaultId });
+      }
+    }
+    return c.html(<ConnectionList connections={listConnections(db, vaultId)} />);
+  });
+
   app.delete("/:clientId", (c) => {
     const clientId = decodeURIComponent(c.req.param("clientId"));
     const vaultId = c.var.vault!.id;
-    const conn = listConnections(db, vaultId).find((conn) => conn.client_id === clientId);
+    const conn = groupOf(vaultId, clientId);
     if (conn) {
-      revokeClient(db, clientId, vaultId);
-      recordAdmin(db, "oauth.revoke", { target: conn.client_name, vaultId });
+      for (const id of conn.client_ids) revokeClient(db, id, vaultId);
+      recordAdmin(db, "oauth.revoke", { target: conn.display_name, vaultId });
     }
     return c.html(<ConnectionList connections={listConnections(db, vaultId)} />);
   });

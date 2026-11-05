@@ -16,7 +16,7 @@ import {
   securityHeaders,
   type AuthEnv,
 } from "./auth/middleware.ts";
-import { abortRegistry, hashToken } from "./auth/tokens.ts";
+import { abortRegistry, extractClientInfo, hashToken, recordClientInfo } from "./auth/tokens.ts";
 import { oauthInteractiveRouter, oauthPublicRouter, wellKnownRouter } from "./oauth/router.ts";
 import { setupRouter, type SetupState } from "./web/routes/setup.tsx";
 import { loginRouter } from "./web/routes/login.tsx";
@@ -28,6 +28,7 @@ import { syncRouter } from "./web/routes/sync.tsx";
 import { snapshotsRouter } from "./web/routes/snapshots.tsx";
 import { auditRouter } from "./web/routes/audit.tsx";
 import { guidanceRouter } from "./web/routes/guidance.tsx";
+import { toolsRouter } from "./web/routes/tools.tsx";
 import { vaultsRouter } from "./web/routes/vaults.tsx";
 import { selectVault, vaultSwitchRouter } from "./web/vault-context.tsx";
 import { recordMcpCall } from "./audit.ts";
@@ -90,6 +91,13 @@ export function createApp(deps: AppDeps) {
   const serveMcp = async (c: Context<AppEnv>) => {
     const transport = new StreamableHTTPTransport();
     const principal = c.var.principal!;
+    if (c.req.method === "POST") {
+      // read a clone so the transport still gets the untouched body
+      try {
+        const info = extractClientInfo(await c.req.raw.clone().json());
+        if (info) recordClientInfo(db, principal, info);
+      } catch {}
+    }
     const server = createMcpServer(c.var.vault!.ctx, {
       onToolCall: (tool, args, result) =>
         recordMcpCall(
@@ -136,6 +144,7 @@ export function createApp(deps: AppDeps) {
   app.route("/app/connections", connectionsRouter(db));
   app.route("/app/audit", auditRouter(db));
   app.route("/app/guidance", guidanceRouter(db));
+  app.route("/app/tools", toolsRouter(db));
   app.route("/app/sync", syncRouter(db));
   app.route("/app/snapshots", snapshotsRouter(db));
   app.route("/app", dashboardRouter());
