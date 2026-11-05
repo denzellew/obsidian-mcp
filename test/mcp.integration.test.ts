@@ -12,7 +12,7 @@ import { VaultStore } from "../src/vault/store.ts";
 import { LinkIndex } from "../src/vault/links.ts";
 import { Snapshotter } from "../src/snapshots/snapshotter.ts";
 import { createVaultContext } from "../src/mcp/context.ts";
-import { createApiToken } from "../src/auth/tokens.ts";
+import { abortRegistry, createApiToken } from "../src/auth/tokens.ts";
 import { fixtureVault, type TmpVault, singleVault } from "./helpers.ts";
 
 let vault: TmpVault;
@@ -473,5 +473,18 @@ describe("MCP integration", () => {
     expect(prompts.map((p) => p.name).sort()).toEqual(["daily_review", "inbox_note"]);
     const p = await client.getPrompt({ name: "inbox_note", arguments: { thought: "buy milk" } });
     expect(JSON.stringify(p.messages)).toContain("buy milk");
+  });
+
+  test("finished requests release their server + transport (no registry leak)", async () => {
+    // let any in-flight requests from earlier tests settle first
+    const settle = async (limit: number) => {
+      const deadline = Date.now() + 2_000;
+      while (abortRegistry.size > limit && Date.now() < deadline) await Bun.sleep(10);
+    };
+    await settle(1);
+    const before = abortRegistry.size;
+    for (let i = 0; i < 25; i++) await client.listTools();
+    await settle(before);
+    expect(abortRegistry.size).toBeLessThanOrEqual(before);
   });
 });
