@@ -204,6 +204,13 @@ class AbortRegistry {
     }
     this.streams.delete(tokenHash);
   }
+
+  /** Live registrations across all tokens (test hook). */
+  get size(): number {
+    let n = 0;
+    for (const set of this.streams.values()) n += set.size;
+    return n;
+  }
 }
 
 export const abortRegistry = new AbortRegistry();

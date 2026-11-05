@@ -175,6 +175,28 @@ interface Bucket {
 
 const buckets = new Map<string, Bucket>();
 
+// A bucket idle for a full minute has refilled completely, so dropping it is
+// indistinguishable from keeping it. The cap bounds growth within that minute
+// when the client-controlled X-Forwarded-For varies per request.
+const BUCKET_IDLE_MS = 60_000;
+const MAX_BUCKETS = 10_000;
+let lastSweep = 0;
+
+function sweepBuckets(now: number) {
+  if (now - lastSweep < BUCKET_IDLE_MS && buckets.size < MAX_BUCKETS) return;
+  lastSweep = now;
+  for (const [key, b] of buckets) {
+    if (now - b.last >= BUCKET_IDLE_MS) buckets.delete(key);
+  }
+  // still full of active keys: evict the oldest in a chunk, so a flood doesn't
+  // trigger a full sweep on every request
+  while (buckets.size >= MAX_BUCKETS * 0.9) {
+    const oldest = buckets.keys().next().value;
+    if (oldest === undefined) break;
+    buckets.delete(oldest);
+  }
+}
+
 export function rateLimit(name: string, perMinute: number): MiddlewareHandler {
   return async (c, next) => {
     const ip =
@@ -183,6 +205,7 @@ export function rateLimit(name: string, perMinute: number): MiddlewareHandler {
       "local";
     const key = `${name}:${ip}`;
     const now = Date.now();
+    sweepBuckets(now);
     let b = buckets.get(key);
     if (!b) {
       b = { tokens: perMinute, last: now };
@@ -201,6 +224,12 @@ export function rateLimit(name: string, perMinute: number): MiddlewareHandler {
 /** Test hook. */
 export function resetRateLimits() {
   buckets.clear();
+  lastSweep = 0;
+}
+
+/** Test hook. */
+export function rateLimitBucketCount(): number {
+  return buckets.size;
 }
 
 export function clientIp(c: Context): string {

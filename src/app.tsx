@@ -113,8 +113,32 @@ export function createApp(deps: AppDeps) {
     // revoking the token kills any live SSE stream for it immediately
     const token = c.var.bearerToken!;
     const unregister = abortRegistry.register(hashToken(token), () => void transport.close());
-    transport.onclose = unregister;
-    return transport.handleRequest(c);
+    // The stateless transport never closes itself (only on DELETE), so without
+    // this every request's server + transport stays pinned in abortRegistry.
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      unregister();
+      void server.close().catch(() => {});
+    };
+    transport.onclose = release;
+    let res: Response | undefined;
+    try {
+      res = await transport.handleRequest(c);
+    } catch (err) {
+      release();
+      throw err;
+    }
+    if (!res?.body) {
+      release();
+      return res;
+    }
+    return new Response(onBodyDone(res.body, release), {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
   };
   // No vault answers here; say where they are rather than issuing an auth challenge.
   app.all("/mcp", (c) =>
@@ -152,6 +176,34 @@ export function createApp(deps: AppDeps) {
   app.get("/", (c) => c.redirect("/app"));
 
   return app;
+}
+
+/**
+ * Pass a response body through, calling `done` once it finishes, errors, or
+ * the client disconnects (cancel) — whichever comes first.
+ */
+function onBodyDone(body: ReadableStream<Uint8Array>, done: () => void): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(ctl) {
+      try {
+        const { done: finished, value } = await reader.read();
+        if (finished) {
+          ctl.close();
+          done();
+        } else {
+          ctl.enqueue(value);
+        }
+      } catch (err) {
+        ctl.error(err);
+        done();
+      }
+    },
+    cancel(reason) {
+      done();
+      return reader.cancel(reason);
+    },
+  });
 }
 
 /** First line of a tool result's text content, for the audit detail column. */
